@@ -979,6 +979,12 @@ private:
 
         // Determine message type.
         optional<MessageSender> sender;
+        // Check for ERV message (D0) first
+        if (buffer[0] == 0xD0) {
+            sender = MessageSender::Unit;
+            process_status_message(*sender, buffer, had_error);
+            return;
+        }
         switch (buffer[0] & 0xf8) {
             case 0xC8:
                 sender = MessageSender::Unit;
@@ -1027,6 +1033,112 @@ private:
             return;
         }
 
+        // Check if this is an ERV message (D0)
+        bool is_erv_message = (buffer[0] == 0xD0);
+
+        if (is_erv_message) {
+            // ERV message decoding
+            ESP_LOGD(TAG, "Processing ERV status message");
+
+            // Consider slave controller initialized if we received a status message from the other
+            // controller or the unit.
+            if (slave_) {
+                is_initializing_ = false;
+            }
+
+            // Don't update our settings if we have a pending change/send, because else we overwrite
+            // changes we still have to send (or are sending) to the ERV.
+            if (pending_status_change_) {
+                ESP_LOGD(TAG, "ignoring because pending change");
+                return;
+            }
+            if (pending_send_ == PendingSendKind::Status) {
+                ESP_LOGD(TAG, "ignoring because pending send");
+                return;
+            }
+
+            if (sender != MessageSender::Slave) {
+                memcpy(last_recv_status_, buffer, MsgLen);
+            }
+
+            // Byte 1: Power - 0x03 = ON, 0x01 = OFF
+            uint8_t power_byte = buffer[1];
+            bool power_on = (power_byte == 0x03);
+            if (power_on) {
+                // Power is ON, need to decode mode and fan
+                this->mode = climate::CLIMATE_MODE_FAN_ONLY;
+            } else {
+                this->mode = climate::CLIMATE_MODE_OFF;
+            }
+
+            // Byte 2: Mode - 0x60 = Bypass, 0x40 = Add Fast, 0x20 = Add Esave
+            uint8_t mode_byte = buffer[2];
+            const char* mode_str = "Unknown";
+            if (power_on) {
+                switch (mode_byte) {
+                    case 0x60:
+                        mode_str = "Bypass";
+                        // Keep FAN_ONLY mode for Bypass
+                        break;
+                    case 0x40:
+                        mode_str = "Add Fast";
+                        // Keep FAN_ONLY mode for Add Fast
+                        break;
+                    case 0x20:
+                        mode_str = "Add Esave";
+                        // Keep FAN_ONLY mode for Add Esave
+                        break;
+                    default:
+                        ESP_LOGW(TAG, "Unknown ERV mode: 0x%02X", mode_byte);
+                        mode_str = "Unknown";
+                        break;
+                }
+            }
+
+            // Byte 3: Fan speed - 0x20 = Low, 0x40 = Medium, 0x60 = High, 0x80 = Add Fast or Auto
+            uint8_t fan_byte = buffer[3];
+            const char* fan_str = "Unknown";
+            if (power_on) {
+                switch (fan_byte) {
+                    case 0x20:
+                        this->fan_mode = climate::CLIMATE_FAN_LOW;
+                        fan_str = "Low";
+                        break;
+                    case 0x40:
+                        this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
+                        fan_str = "Medium";
+                        break;
+                    case 0x60:
+                        this->fan_mode = climate::CLIMATE_FAN_HIGH;
+                        fan_str = "High";
+                        break;
+                    case 0x80:
+                        this->fan_mode = climate::CLIMATE_FAN_AUTO;
+                        fan_str = "Add Fast/Auto";
+                        break;
+                    default:
+                        ESP_LOGW(TAG, "Unknown ERV fan speed: 0x%02X, defaulting to Medium", fan_byte);
+                        this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
+                        fan_str = "Unknown (defaulted to Medium)";
+                        break;
+                }
+            } else {
+                // Power is OFF, fan mode doesn't matter but set a default
+                this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
+                fan_str = "N/A (Power OFF)";
+            }
+
+            // Log ERV decoded data
+            ESP_LOGI(TAG, "ERV Status - Power: %s (0x%02X), Mode: %s (0x%02X), Fan: %s (0x%02X)",
+                     power_on ? "ON" : "OFF", power_byte,
+                     mode_str, mode_byte,
+                     fan_str, fan_byte);
+
+            publish_state();
+            return;
+        }
+
+        // Original AC message decoding
         // Consider slave controller initialized if we received a status message from the other
         // controller or the unit.
         if (slave_) {
@@ -1184,6 +1296,13 @@ private:
                 sleep_timer_.publish_state(minutes);
             }
         }
+
+        // Log AC decoded data
+        ESP_LOGI(TAG, "AC Status - Mode: %d, Fan: %d, Power: %s, Target Temp: %.1f",
+                 static_cast<int>(this->mode),
+                 this->fan_mode.has_value() ? static_cast<int>(this->fan_mode.value()) : -1,
+                 (this->mode != climate::CLIMATE_MODE_OFF) ? "ON" : "OFF",
+                 this->target_temperature);
 
         publish_state();
     }
@@ -1457,6 +1576,7 @@ private:
         // 500 ms might be overkill, but the device usually sends the same message twice with a
         // short delay (about 200 ms?) between them so let's not send there either to avoid
         // collisions.
+#if 0        
         auto check_can_send = [&]() -> bool {
             while (true) {
                 if (UARTDevice::available() > 0 || !rx_pin_.digital_read()) {
@@ -1508,6 +1628,7 @@ private:
             }
             return;
         }
+#endif
     }
 };
 
