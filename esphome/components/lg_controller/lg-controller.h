@@ -979,12 +979,13 @@ private:
 
         // Determine message type.
         optional<MessageSender> sender;
-        // Check for ERV message (D0) first
-        if (buffer[0] == 0xD0) {
+        // Check for ERV message (D0 or B0) first
+        if (buffer[0] == 0xD0 || buffer[0] == 0xB0) {
             sender = MessageSender::Unit;
             process_status_message(*sender, buffer, had_error);
             return;
         }
+#if 0
         switch (buffer[0] & 0xf8) {
             case 0xC8:
                 sender = MessageSender::Unit;
@@ -1023,6 +1024,7 @@ private:
             default:
                 return;
         }
+#endif
     }
 
     void process_status_message(MessageSender sender, const uint8_t* buffer, bool* had_error) {
@@ -1072,61 +1074,53 @@ private:
                 this->mode = climate::CLIMATE_MODE_OFF;
             }
 
-            // Byte 2: Mode - 0x60 = Bypass, 0x40 = Add Fast, 0x20 = Add Esave
+            // Byte 2: Mode - 0x60 = Bypass, 0x40 = Add Fast, 0x20 = Heat Exchange
             uint8_t mode_byte = buffer[2];
             const char* mode_str = "Unknown";
-            if (power_on) {
-                switch (mode_byte) {
-                    case 0x60:
-                        mode_str = "Bypass";
-                        // Keep FAN_ONLY mode for Bypass
-                        break;
-                    case 0x40:
-                        mode_str = "Add Fast";
-                        // Keep FAN_ONLY mode for Add Fast
-                        break;
-                    case 0x20:
-                        mode_str = "Add Esave";
-                        // Keep FAN_ONLY mode for Add Esave
-                        break;
-                    default:
-                        ESP_LOGW(TAG, "Unknown ERV mode: 0x%02X", mode_byte);
-                        mode_str = "Unknown";
-                        break;
-                }
+            switch (mode_byte) {
+                case 0x60:
+                    mode_str = "Bypass";
+                    // Keep FAN_ONLY mode for Bypass
+                    break;
+                case 0x40:
+                    mode_str = "Add Fast";
+                    // Keep FAN_ONLY mode for Add Fast
+                    break;
+                case 0x20:
+                    mode_str = "Heat Exchange";
+                    // Keep FAN_ONLY mode for Add Esave
+                    break;
+                default:
+                    ESP_LOGW(TAG, "Unknown ERV mode: 0x%02X", mode_byte);
+                    mode_str = "Unknown";
+                    break;
             }
 
             // Byte 3: Fan speed - 0x20 = Low, 0x40 = Medium, 0x60 = High, 0x80 = Add Fast or Auto
             uint8_t fan_byte = buffer[3];
             const char* fan_str = "Unknown";
-            if (power_on) {
-                switch (fan_byte) {
-                    case 0x20:
-                        this->fan_mode = climate::CLIMATE_FAN_LOW;
-                        fan_str = "Low";
-                        break;
-                    case 0x40:
-                        this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
-                        fan_str = "Medium";
-                        break;
-                    case 0x60:
-                        this->fan_mode = climate::CLIMATE_FAN_HIGH;
-                        fan_str = "High";
-                        break;
-                    case 0x80:
-                        this->fan_mode = climate::CLIMATE_FAN_AUTO;
-                        fan_str = "Add Fast/Auto";
-                        break;
-                    default:
-                        ESP_LOGW(TAG, "Unknown ERV fan speed: 0x%02X, defaulting to Medium", fan_byte);
-                        this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
-                        fan_str = "Unknown (defaulted to Medium)";
-                        break;
-                }
-            } else {
-                // Power is OFF, fan mode doesn't matter but set a default
-                this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
-                fan_str = "N/A (Power OFF)";
+            switch (fan_byte) {
+                case 0x20:
+                    this->fan_mode = climate::CLIMATE_FAN_LOW;
+                    fan_str = "Low";
+                    break;
+                case 0x40:
+                    this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
+                    fan_str = "Medium";
+                    break;
+                case 0x60:
+                    this->fan_mode = climate::CLIMATE_FAN_HIGH;
+                    fan_str = "High";
+                    break;
+                case 0x80:
+                    this->fan_mode = climate::CLIMATE_FAN_AUTO;
+                    fan_str = "Auto";
+                    break;
+                default:
+                    ESP_LOGW(TAG, "Unknown ERV fan speed: 0x%02X, defaulting to Medium", fan_byte);
+                    this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
+                    fan_str = "Unknown (defaulted to Medium)";
+                    break;
             }
 
             // Log ERV decoded data
