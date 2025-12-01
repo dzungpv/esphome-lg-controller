@@ -540,6 +540,7 @@ public:
 
     // Process changes from HA.
     void control(const climate::ClimateCall &call) override {
+#if 0
         if (call.get_mode().has_value()) {
             this->mode = *call.get_mode();
         }
@@ -554,6 +555,7 @@ public:
         }
         this->pending_status_change_ = true;
         this->publish_state();
+#endif
     }
 
     climate::ClimateTraits traits() override {
@@ -1124,12 +1126,13 @@ private:
             }
 
             // Log ERV decoded data
-            ESP_LOGI(TAG, "ERV Status - Power: %s (0x%02X), Mode: %s (0x%02X), Fan: %s (0x%02X)",
+            ESP_LOGW(TAG, "ERV Status - Power: %s (0x%02X), Mode: %s (0x%02X), Fan: %s (0x%02X)",
                      power_on ? "ON" : "OFF", power_byte,
                      mode_str, mode_byte,
                      fan_str, fan_byte);
-
+#if 0
             publish_state();
+#endif
             return;
         }
 
@@ -1142,7 +1145,7 @@ private:
 
         // Handle simple input sensors first. These are safe to update even if we have a pending
         // change.
-
+#if 0
         defrost_.publish_state(buffer[3] & 0x4);
         preheat_.publish_state(buffer[3] & 0x8);
 
@@ -1301,6 +1304,7 @@ private:
                  this->target_temperature);
 
         publish_state();
+#endif
     }
 
     void process_capabilities_message(MessageSender sender, const uint8_t* buffer) {
