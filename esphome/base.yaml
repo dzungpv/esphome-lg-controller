@@ -53,8 +53,8 @@ climate:
       # For the FeatherS3, use GPIO17
       number: GPIO26 # Keep in sync with rx_pin above.
       allow_other_uses: true
-    fahrenheit: ${fahrenheit}
-    is_slave_controller: ${is_slave_controller}
+    fahrenheit: false
+    is_slave_controller: false
     temperature_sensor: temp_sensor
     vane1:
       name: Airflow 1 Up/Down

@@ -1048,6 +1048,7 @@ private:
 
             // Don't update our settings if we have a pending change/send, because else we overwrite
             // changes we still have to send (or are sending) to the ERV.
+#if 0
             if (pending_status_change_) {
                 ESP_LOGD(TAG, "ignoring because pending change");
                 return;
@@ -1056,7 +1057,7 @@ private:
                 ESP_LOGD(TAG, "ignoring because pending send");
                 return;
             }
-
+#endif
             if (sender != MessageSender::Slave) {
                 memcpy(last_recv_status_, buffer, MsgLen);
             }
