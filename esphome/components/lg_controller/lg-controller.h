@@ -1694,7 +1694,7 @@ private:
 #endif
 
         if (slave_ && is_initializing_) {
-            ESP_LOGD(TAG, "Not sending, waiting for other controller or unit to send first");
+            ESP_LOGW(TAG, "Not sending, waiting for other controller or unit to send first");
             return;
         }
 
