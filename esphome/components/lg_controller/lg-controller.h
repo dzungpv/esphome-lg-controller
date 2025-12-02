@@ -720,7 +720,7 @@ private:
             send_erv_status_message();
             return;
         }
-        
+#if 0
         // Byte 0: message type.
         send_buf_[0] = slave_ ? 0x28 : 0xA8;
 
@@ -882,7 +882,7 @@ private:
         // Byte 12.
         send_buf_[12] = calc_checksum(send_buf_);
 
-        ESP_LOGD(TAG, "sending %s", format_hex_pretty(send_buf_, MsgLen).c_str());
+        ESP_LOGD(TAG, "sending status message %s", format_hex_pretty(send_buf_, MsgLen).c_str());
         UARTDevice::write_array(send_buf_, MsgLen);
 
         pending_status_change_ = false;
@@ -901,6 +901,7 @@ private:
                 publish_state();
             }
         }
+#endif
     }
 
     void send_erv_status_message() {
@@ -1023,7 +1024,7 @@ private:
 
         send_buf_[12] = calc_checksum(send_buf_);
 
-        ESP_LOGD(TAG, "sending %s", format_hex_pretty(send_buf_, MsgLen).c_str());
+        ESP_LOGD(TAG, "sending type A settings %s", format_hex_pretty(send_buf_, MsgLen).c_str());
         UARTDevice::write_array(send_buf_, MsgLen);
 
         pending_type_a_settings_change_ = false;
@@ -1058,7 +1059,7 @@ private:
 
         send_buf_[12] = calc_checksum(send_buf_);
 
-        ESP_LOGD(TAG, "sending %s", format_hex_pretty(send_buf_, MsgLen).c_str());
+        ESP_LOGD(TAG, "sending type B settings %s", format_hex_pretty(send_buf_, MsgLen).c_str());
         UARTDevice::write_array(send_buf_, MsgLen);
 
         pending_type_b_settings_change_ = false;
