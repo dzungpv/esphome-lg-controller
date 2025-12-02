@@ -140,10 +140,6 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
     LgNumber& fan_speed_medium_;
     LgNumber& fan_speed_high_;
 
-    LgNumber& sleep_timer_;
-
-    LgSwitch& internal_thermistor_;
-    LgSwitch& auto_dry_;
     LgSelect& erv_mode_;
 
     uint8_t recv_buf_[MsgLen] = {};
@@ -174,9 +170,7 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
 
     uint8_t fan_speed_[4] = {0,0,0,0};
 
-    optional<uint32_t> sleep_timer_target_millis_{};
     bool active_reservation_ = false;
-    bool ignore_sleep_timer_callback_ = false;
 
     uint32_t NVS_STORAGE_VERSION = 2843654U; // Change version if the NVSStorage struct changes
     struct NVSStorage {
@@ -206,7 +200,6 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
         VERTICAL_SWING,
         HORIZONTAL_SWING,
         HAS_ESP_VALUE_SETTING,
-        AUTO_DRY,
     };
 
     bool parse_capability(LgCapability capability) {
@@ -239,8 +232,6 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
                 return (nvs_storage_.capabilities_message[1] & 0x40) != 0;
             case LgCapability::HAS_ESP_VALUE_SETTING:
                 return (nvs_storage_.capabilities_message[4] & 0x02) != 0;
-            case LgCapability::AUTO_DRY:
-                return (nvs_storage_.capabilities_message[4] & 0x80) != 0;
         }
         return false;
     }
@@ -339,11 +330,7 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
                     }
                 }
             }
-            auto_dry_.set_internal(!parse_capability(LgCapability::AUTO_DRY));
         }
-
-        internal_thermistor_.set_internal(slave_);
-        sleep_timer_.set_internal(slave_);
     }
 
 public:
@@ -352,9 +339,6 @@ public:
                  LgNumber* fan_speed_low,
                  LgNumber* fan_speed_medium,
                  LgNumber* fan_speed_high,
-                 LgNumber* sleep_timer,
-                 LgSwitch* internal_thermistor,
-                 LgSwitch* auto_dry,
                  LgSelect* erv_mode,
                  bool fahrenheit, bool is_slave_controller)
       : rx_pin_(*rx_pin),
@@ -362,9 +346,6 @@ public:
         fan_speed_low_(*fan_speed_low),
         fan_speed_medium_(*fan_speed_medium),
         fan_speed_high_(*fan_speed_high),
-        sleep_timer_(*sleep_timer),
-        internal_thermistor_(*internal_thermistor),
-        auto_dry_(*auto_dry),
         erv_mode_(*erv_mode),
         fahrenheit_(fahrenheit),
         slave_(is_slave_controller)
@@ -382,16 +363,7 @@ public:
         fan_speed_high_.add_on_state_callback([this](float v) {
             set_fan_speed(3, v);
         });
-        sleep_timer_.add_on_state_callback([this](float v) {
-            set_sleep_timer(v);
-        });
 
-        internal_thermistor_.add_on_state_callback([this](bool) {
-            pending_status_change_ = true;
-        });
-        auto_dry_.add_on_state_callback([this](bool) {
-            pending_type_a_settings_change_ = true;
-        });
         erv_mode_.add_on_state_callback([this](std::string, size_t) {
             pending_status_change_ = true;
         });
@@ -417,10 +389,6 @@ public:
             this->preset = climate::CLIMATE_PRESET_NONE;
             this->publish_state();
         }
-
-        internal_thermistor_.restore_and_set_mode(esphome::switch_::SWITCH_RESTORE_DEFAULT_OFF);
-
-        sleep_timer_.publish_state(0);
 
         // Configure climate traits and entities based on the capabilities message (if available)
         configure_capabilities();
@@ -482,42 +450,6 @@ private:
         if (!is_initializing_) {
             pending_type_a_settings_change_ = true;
         }
-    }
-
-    void set_sleep_timer(int minutes) {
-        if (ignore_sleep_timer_callback_) {
-            return;
-        }
-        // 0 clears the timer. Accept max 7 hours.
-        if (minutes < 0 || minutes > 7 * 60) {
-            ESP_LOGE(TAG, "Ignoring invalid sleep timer value: %d minutes", minutes);
-            return;
-        }
-        if (slave_) {
-            ESP_LOGE(TAG, "Ignoring sleep timer for slave controller");
-            return;
-        }
-        ESP_LOGD(TAG, "Setting sleep timer: %d minutes", minutes);
-        if (minutes > 0) {
-            sleep_timer_target_millis_ = millis() + unsigned(minutes) * 60 * 1000;
-            active_reservation_ = true;
-        } else {
-            sleep_timer_target_millis_.reset();
-            active_reservation_ = false;
-        }
-        pending_status_change_ = true;
-    }
-
-    optional<uint32_t> get_sleep_timer_minutes() const {
-        if (!sleep_timer_target_millis_.has_value()) {
-            return {};
-        }
-        int32_t diff = int32_t(sleep_timer_target_millis_.value() - millis());
-        if (diff <= 0) {
-            return {};
-        }
-        uint32_t minutes = uint32_t(diff) / 1000 / 60 + 1;
-        return minutes;
     }
 
     static uint8_t calc_checksum(const uint8_t* buffer) {
@@ -686,14 +618,6 @@ private:
                 send_buf_[9] |= 0x40;
             }
             send_buf_[10] = 0x80;
-        } else if (optional<uint32_t> minutes = get_sleep_timer_minutes()) {
-            // Set sleep timer.
-            // Byte 8 stores the kind (0x38) and high bits of number of minutes (0x7).
-            // Byte 9 stores the low bits of the number of minutes.
-            constexpr uint8_t timer_kind_sleep = 3;
-            send_buf_[8] = timer_kind_sleep << 3;
-            send_buf_[8] |= (*minutes >> 8) & 0b111;
-            send_buf_[9] = *minutes & 0xff;
         }
 
         // Byte 11.
@@ -830,13 +754,6 @@ private:
         send_buf_[3] = fan_speed_[1];
         send_buf_[4] = fan_speed_[2];
         send_buf_[5] = fan_speed_[3];
-
-        // Set auto dry setting.
-        uint8_t b = send_buf_[11] & ~0x8;
-        if (auto_dry_.state) {
-            b |= 0x8;
-        }
-        send_buf_[11] = b;
 
         send_buf_[12] = calc_checksum(send_buf_);
 
@@ -1204,16 +1121,6 @@ private:
 
         active_reservation_ = buffer[3] & 0x10;
 
-        // Set or clear sleep timer.
-        if (!slave_) {
-            if (sleep_timer_target_millis_.has_value() && !active_reservation_) {
-                sleep_timer_.publish_state(0);
-            } else if (((buffer[8] >> 3) & 0x7) == 3) {
-                uint32_t minutes = (uint32_t(buffer[8] & 0x7) << 8) | buffer[9];
-                sleep_timer_.publish_state(minutes);
-            }
-        }
-
         // Log AC decoded data
         ESP_LOGI(TAG, "AC Status - Mode: %d, Fan: %d, Power: %s, Target Temp: %.1f",
                  static_cast<int>(this->mode),
@@ -1268,8 +1175,6 @@ private:
                 pending_type_a_settings_change_ = true;
             }
         }
-
-        auto_dry_.publish_state(buffer[11] & 0x8);
 
         if (sender != MessageSender::Slave) {
             // Handle fan speed 0 (slow) change
@@ -1359,29 +1264,6 @@ private:
         }
 
         uint32_t millis_now = millis();
-#if 0
-        // Handle sleep timer.
-        if (sleep_timer_target_millis_.has_value()) {
-            int32_t diff = int32_t(sleep_timer_target_millis_.value() - millis_now);
-            if (diff <= 0) {
-                ESP_LOGD(TAG, "Turning off for sleep timer");
-                sleep_timer_target_millis_.reset();
-                active_reservation_= false;
-                ignore_sleep_timer_callback_ = true;
-                sleep_timer_.publish_state(0);
-                ignore_sleep_timer_callback_ = false;
-                this->mode = climate::CLIMATE_MODE_OFF;
-                pending_status_change_ = true;
-                publish_state();
-            } else if (optional<uint32_t> minutes = get_sleep_timer_minutes()) {
-                if (sleep_timer_.state != *minutes) {
-                    ignore_sleep_timer_callback_ = true;
-                    sleep_timer_.publish_state(*minutes);
-                    ignore_sleep_timer_callback_ = false;
-                }
-            }
-        }
-#endif
 
         if (slave_ && is_initializing_) {
             ESP_LOGW(TAG, "Not sending, waiting for other controller or unit to send first");

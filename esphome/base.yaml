@@ -75,19 +75,6 @@ climate:
       id: fan_speed_high
       icon: mdi:fan-speed-3
       mode: box
-    sleep_timer:
-      name: "Sleep Timer (minutes)"
-      id: sleep_timer
-      icon: mdi:timer-outline
-      mode: box
-    internal_thermistor:
-      name: Internal Thermistor
-      id: internal_thermistor
-      icon: mdi:thermometer
-    auto_dry:
-      name: Auto Dry
-      id: auto_dry
-      icon: mdi:fan-clock
     erv_mode:
       name: ERV Mode
       id: erv_mode

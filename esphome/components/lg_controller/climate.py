@@ -23,10 +23,7 @@ CONF_FAN_SPEED_SLOW = "fan_speed_slow"
 CONF_FAN_SPEED_LOW = "fan_speed_low"
 CONF_FAN_SPEED_MEDIUM = "fan_speed_medium"
 CONF_FAN_SPEED_HIGH = "fan_speed_high"
-CONF_SLEEP_TIMER = "sleep_timer"
 
-CONF_INTERNAL_THERMISTOR = "internal_thermistor"
-CONF_AUTO_DRY = "auto_dry"
 CONF_ERV_MODE = "erv_mode"
 
 ERV_MODE_OPTIONS = ["Bypass", "Heat Exchange"]
@@ -42,10 +39,7 @@ CONFIG_SCHEMA = climate.climate_schema(LgController).extend(
         cv.Required(CONF_FAN_SPEED_LOW): number.number_schema(LgNumber),
         cv.Required(CONF_FAN_SPEED_MEDIUM): number.number_schema(LgNumber),
         cv.Required(CONF_FAN_SPEED_HIGH): number.number_schema(LgNumber),
-        cv.Required(CONF_SLEEP_TIMER): number.number_schema(LgNumber),
 
-        cv.Required(CONF_INTERNAL_THERMISTOR): switch.switch_schema(LgSwitch),
-        cv.Required(CONF_AUTO_DRY): switch.switch_schema(LgSwitch),
         cv.Required(CONF_ERV_MODE): select.select_schema(LgSelect),
     }
 ).extend(cv.COMPONENT_SCHEMA).extend(uart.UART_DEVICE_SCHEMA)
@@ -57,16 +51,12 @@ async def to_code(config):
     fan_speed_low = await number.new_number(config[CONF_FAN_SPEED_LOW], min_value=0, max_value=255, step=1)
     fan_speed_medium = await number.new_number(config[CONF_FAN_SPEED_MEDIUM], min_value=0, max_value=255, step=1)
     fan_speed_high = await number.new_number(config[CONF_FAN_SPEED_HIGH], min_value=0, max_value=255, step=1)
-    sleep_timer = await number.new_number(config[CONF_SLEEP_TIMER], min_value=0, max_value=420, step=1)
 
-    internal_thermistor = await switch.new_switch(config[CONF_INTERNAL_THERMISTOR])
-    auto_dry = await switch.new_switch(config[CONF_AUTO_DRY])
     erv_mode = await select.new_select(config[CONF_ERV_MODE], options=ERV_MODE_OPTIONS)
 
     var = cg.new_Pvariable(config[CONF_ID], rx_pin,
                            fan_speed_slow, fan_speed_low, fan_speed_medium, fan_speed_high,
-                           sleep_timer,
-                           internal_thermistor, auto_dry, erv_mode,
+                           erv_mode,
                            config[CONF_FAHRENHEIT], config[CONF_IS_SLAVE_CONTROLLER])
     await climate.register_climate(var, config)
     await cg.register_component(var, config)
