@@ -912,14 +912,15 @@ private:
         send_buf_[0] = slave_ ? 0x30 : 0xB0;
 
         // Byte 1: Power control and change flag
+        // For 0xB0 (master command): 0x03 = ON, 0x01 = OFF
         uint8_t b = 0;
         if (pending_status_change_) {
             b |= 0x01; // Change flag
         }
         if (this->mode == climate::CLIMATE_MODE_FAN_ONLY) {
-            b |= 0x03; // Power ON (bits 1:0 = 0x03)
+            b |= 0x03; // Power ON (bits 1:0 = 0x03 for 0xB0 command)
         } else {
-            b |= 0x01; // Power OFF (bits 1:0 = 0x01)
+            b |= 0x01; // Power OFF (bits 1:0 = 0x01 for 0xB0 command)
         }
         send_buf_[1] = b;
         
@@ -984,7 +985,7 @@ private:
         // Byte 12: Checksum
         send_buf_[12] = calc_checksum(send_buf_);
         
-        ESP_LOGD(TAG, "sending ERV %s", format_hex_pretty(send_buf_, MsgLen).c_str());
+        ESP_LOGD(TAG, "sending ERV control message %s", format_hex_pretty(send_buf_, MsgLen).c_str());
         UARTDevice::write_array(send_buf_, MsgLen);
         
         pending_status_change_ = false;
@@ -1177,10 +1178,18 @@ private:
                 memcpy(last_recv_status_, buffer, MsgLen);
             }
             bool power_on = false;
-            // Byte 1: Power control - bits 1:0: 0x03 = ON, 0x01 = OFF
+            // Byte 1: Power control - bits 1:0
+            // For 0xD0 (unit status): 0x02 = ON, 0x00 = OFF
+            // For 0xB0 (master command): Same as 0xD0, plus 0x03 = ON with request, 0x01 = OFF with request
             uint8_t power_byte = buffer[1];
             uint8_t power_bits = power_byte & 0x03;
-            power_on = (power_bits == 0x03);
+            if (buffer[0] == 0xD0) {
+                // Unit status message: 0x02 = ON, 0x00 = OFF
+                power_on = (power_bits == 0x02);
+            } else {
+                // Master command (0xB0): 0x02 or 0x03 = ON, 0x00 or 0x01 = OFF
+                power_on = (power_bits == 0x02 || power_bits == 0x03);
+            }
 
             if (power_on) {
                 // Power is ON, need to decode mode and fan

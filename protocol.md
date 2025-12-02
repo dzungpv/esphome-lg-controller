@@ -364,7 +364,7 @@ Example message: `B0.03.60.20.00.00.00.00.00.00.00.00.66`
 | --- | --- | --- | --- |
 | 0 | `XXXX_XXXX` | Message type<br>`0xB0` = master controller<br>`0xD0` = unit/slave controller | Message source identifier |
 | 1 | `0000_000X` | Change flag (set when settings changed) | Used internally |
-|   | `0000_00XX` | Power control<br>`0x03` = Power ON<br>`0x01` = Power OFF | `climate.mode`<br>`CLIMATE_MODE_FAN_ONLY` (ON)<br>`CLIMATE_MODE_OFF` (OFF) |
+|   | `0000_00XX` | Power control<br>**For 0xD0 (unit status)**:<br>`0x02` = Power ON<br>`0x00` = Power OFF<br>**For 0xB0 (master command)**:<br>`0x02` = Power ON<br>`0x00` = Power OFF<br>`0x03` = Power ON with request<br>`0x01` = Power OFF with request | `climate.mode`<br>`CLIMATE_MODE_FAN_ONLY` (ON)<br>`CLIMATE_MODE_OFF` (OFF) |
 | 2 | `00XX_0000` | ERV Mode<br>`0x60` = Bypass<br>`0x20` = Heat Exchange | `select.erv_mode`<br>"Bypass" or "Heat Exchange" |
 | 3 | `XXX0_0000` | Fan speed (bits 7-5)<br>`0x20` = Low<br>`0x40` = Medium<br>`0x60` = High<br>`0x80` = Auto | `climate.fan_mode`<br>`CLIMATE_FAN_LOW`<br>`CLIMATE_FAN_MEDIUM`<br>`CLIMATE_FAN_HIGH`<br>`CLIMATE_FAN_AUTO` |
 | 4 | `XXXX_XXXX` | Reserved/Unknown | Not used |
@@ -391,16 +391,17 @@ The ERV/HRV controller maps protocol values to ESPHome entities as follows:
 
 ### Message Flow
 
-1. **Receiving ERV Status** (`0xD0` from unit):
-   - Byte 1 bits 1:0 = `0x03` → Set climate mode to `FAN_ONLY`
-   - Byte 1 bits 1:0 = `0x01` → Set climate mode to `OFF`
+1. **Receiving ERV Status**:
+   - **0xD0 (from unit)**: Byte 1 bits 1:0 = `0x02` → Set climate mode to `FAN_ONLY`; `0x00` → Set climate mode to `OFF`
+   - **0xB0 (from master)**: Byte 1 bits 1:0 = `0x02` or `0x03` → Set climate mode to `FAN_ONLY`; `0x00` or `0x01` → Set climate mode to `OFF` (0x03/0x01 indicate change request)
    - Byte 2 bits 6:5 = `0x60` → Update `erv_mode` select to "Bypass"
    - Byte 2 bits 6:5 = `0x20` → Update `erv_mode` select to "Heat Exchange"
    - Byte 3 bits 7:5 = Fan speed → Update `climate.fan_mode`
    - Byte 5 bits 1:0 = Add mode → Update `climate.preset`
 
 2. **Sending ERV Status** (`0xB0` from master controller):
-   - `climate.mode` → Byte 1 power bits
+   - `climate.mode` = `FAN_ONLY` → Byte 1 bits 1:0 = `0x03`
+   - `climate.mode` = `OFF` → Byte 1 bits 1:0 = `0x01`
    - `select.erv_mode` → Byte 2 ERV mode bits
    - `climate.fan_mode` → Byte 3 fan speed bits
    - `climate.preset` → Byte 5 Add mode bits
