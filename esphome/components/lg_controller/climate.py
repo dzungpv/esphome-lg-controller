@@ -46,9 +46,11 @@ CONF_AUTO_DRY_ACTIVE = "auto_dry_active"
 CONF_PURIFIER = "purifier"
 CONF_INTERNAL_THERMISTOR = "internal_thermistor"
 CONF_AUTO_DRY = "auto_dry"
+CONF_ERV_MODE = "erv_mode"
 
 VANE_OPTIONS = ["0 (Default)", "1 (Up)", "2", "3", "4", "5", "6 (Down)"]
 OVERHEATING_OPTIONS = ["0 (Default)", "1 (+4C/+6C)", "2 (+2C/+4C)", "3 (-1C/+1C)", "4 (-0.5C/+0.5C)"]
+ERV_MODE_OPTIONS = ["Bypass", "Heat Exchange"]
 
 CONFIG_SCHEMA = climate.climate_schema(LgController).extend(
     {
@@ -84,6 +86,7 @@ CONFIG_SCHEMA = climate.climate_schema(LgController).extend(
         cv.Required(CONF_PURIFIER): switch.switch_schema(LgSwitch),
         cv.Required(CONF_INTERNAL_THERMISTOR): switch.switch_schema(LgSwitch),
         cv.Required(CONF_AUTO_DRY): switch.switch_schema(LgSwitch),
+        cv.Required(CONF_ERV_MODE): select.select_schema(LgSelect),
     }
 ).extend(cv.COMPONENT_SCHEMA).extend(uart.UART_DEVICE_SCHEMA)
 
@@ -120,6 +123,7 @@ async def to_code(config):
     purifier = await switch.new_switch(config[CONF_PURIFIER])
     internal_thermistor = await switch.new_switch(config[CONF_INTERNAL_THERMISTOR])
     auto_dry = await switch.new_switch(config[CONF_AUTO_DRY])
+    erv_mode = await select.new_select(config[CONF_ERV_MODE], options=ERV_MODE_OPTIONS)
 
     var = cg.new_Pvariable(config[CONF_ID], rx_pin, temperature_sensor,
                            vane1, vane2, vane3, vane4, overheating,
@@ -127,7 +131,7 @@ async def to_code(config):
                            sleep_timer,
                            error_code, pipe_temp_in, pipe_temp_mid, pipe_temp_out,
                            defrost, preheat, outdoor, auto_dry_active,
-                           purifier, internal_thermistor, auto_dry,
+                           purifier, internal_thermistor, auto_dry, erv_mode,
                            config[CONF_FAHRENHEIT], config[CONF_IS_SLAVE_CONTROLLER])
     await climate.register_climate(var, config)
     await cg.register_component(var, config)

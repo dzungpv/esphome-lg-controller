@@ -162,6 +162,7 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
     LgSwitch& purifier_;
     LgSwitch& internal_thermistor_;
     LgSwitch& auto_dry_;
+    LgSelect& erv_mode_;
 
     uint8_t recv_buf_[MsgLen] = {};
     uint32_t recv_buf_len_ = 0;
@@ -284,20 +285,21 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
     }
 
     void configure_capabilities() {
-        // Default traits
+        // Default traits for ERV/HRV
         climate::ClimateModeMask device_modes;
         device_modes.insert(climate::CLIMATE_MODE_OFF);
-        device_modes.insert(climate::CLIMATE_MODE_COOL);
-        device_modes.insert(climate::CLIMATE_MODE_HEAT);
-        device_modes.insert(climate::CLIMATE_MODE_DRY);
         device_modes.insert(climate::CLIMATE_MODE_FAN_ONLY);
-        device_modes.insert(climate::CLIMATE_MODE_HEAT_COOL);
         
         climate::ClimateFanModeMask fan_modes;
         fan_modes.insert(climate::CLIMATE_FAN_LOW);
         fan_modes.insert(climate::CLIMATE_FAN_MEDIUM);
         fan_modes.insert(climate::CLIMATE_FAN_HIGH);
         fan_modes.insert(climate::CLIMATE_FAN_AUTO);
+        
+        climate::ClimatePresetMask preset_modes;
+        preset_modes.insert(climate::CLIMATE_PRESET_NONE);
+        preset_modes.insert(climate::CLIMATE_PRESET_BOOST);
+        preset_modes.insert(climate::CLIMATE_PRESET_ECO);
         
         climate::ClimateSwingModeMask swing_modes;
         swing_modes.insert(climate::CLIMATE_SWING_OFF);
@@ -307,6 +309,7 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
 
         supported_traits_.set_supported_modes(device_modes);
         supported_traits_.set_supported_fan_modes(fan_modes);
+        supported_traits_.set_supported_presets(preset_modes);
         supported_traits_.set_supported_swing_modes(swing_modes);
         supported_traits_.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE);
         supported_traits_.set_visual_min_temperature(MIN_TEMP_SETPOINT);
@@ -429,6 +432,7 @@ public:
                  LgSwitch* purifier,
                  LgSwitch* internal_thermistor,
                  LgSwitch* auto_dry,
+                 LgSelect* erv_mode,
                  bool fahrenheit, bool is_slave_controller)
       : rx_pin_(*rx_pin),
         temperature_sensor_(temperature_sensor),
@@ -453,6 +457,7 @@ public:
         purifier_(*purifier),
         internal_thermistor_(*internal_thermistor),
         auto_dry_(*auto_dry),
+        erv_mode_(*erv_mode),
         fahrenheit_(fahrenheit),
         slave_(is_slave_controller)
     {
@@ -497,6 +502,9 @@ public:
         auto_dry_.add_on_state_callback([this](bool) {
             pending_type_a_settings_change_ = true;
         });
+        erv_mode_.add_on_state_callback([this](std::string, size_t) {
+            pending_status_change_ = true;
+        });
     }
 
     float get_setup_priority() const override {
@@ -516,6 +524,7 @@ public:
             this->target_temperature = 20;
             this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
             this->swing_mode = climate::CLIMATE_SWING_OFF;
+            this->preset = climate::CLIMATE_PRESET_NONE;
             this->publish_state();
         }
 
@@ -540,7 +549,6 @@ public:
 
     // Process changes from HA.
     void control(const climate::ClimateCall &call) override {
-#if 0
         if (call.get_mode().has_value()) {
             this->mode = *call.get_mode();
         }
@@ -553,9 +561,11 @@ public:
         if (call.get_swing_mode().has_value()) {
             set_swing_mode(*call.get_swing_mode());
         }
+        if (call.get_preset().has_value()) {
+            this->preset = *call.get_preset();
+        }
         this->pending_status_change_ = true;
         this->publish_state();
-#endif
     }
 
     climate::ClimateTraits traits() override {
@@ -700,6 +710,17 @@ private:
     }
 
     void send_status_message() {
+        // Check if this is ERV/HRV (D0/B0 messages)
+        bool is_erv = false;
+        if (last_recv_status_[0] == 0xD0 || last_recv_status_[0] == 0xB0) {
+            is_erv = true;
+        }
+        
+        if (is_erv) {
+            send_erv_status_message();
+            return;
+        }
+        
         // Byte 0: message type.
         send_buf_[0] = slave_ ? 0x28 : 0xA8;
 
@@ -882,6 +903,94 @@ private:
         }
     }
 
+    void send_erv_status_message() {
+        // Copy last received ERV message
+        memcpy(send_buf_, last_recv_status_, MsgLen);
+        
+        // Byte 0: message type (B0 for master, 30 for slave, this is guest base on 0x80 of the AC 0x28 and 0xA8)
+        send_buf_[0] = slave_ ? 0x30 : 0xB0;
+
+        // Byte 1: Power control and change flag
+        uint8_t b = 0;
+        if (pending_status_change_) {
+            b |= 0x01; // Change flag
+        }
+        if (this->mode == climate::CLIMATE_MODE_FAN_ONLY) {
+            b |= 0x03; // Power ON (bits 1:0 = 0x03)
+        } else {
+            b |= 0x01; // Power OFF (bits 1:0 = 0x01)
+        }
+        send_buf_[1] = b;
+        
+        // Byte 2: ERV Mode (Heat Exchange = 0x20, Bypass = 0x60)
+        b = last_recv_status_[2] & ~0x60; // Clear mode bits
+        if (erv_mode_.has_state()) {
+            std::string erv_mode_str = erv_mode_.current_option();
+            if (erv_mode_str == "Heat Exchange") {
+                b |= 0x20; // Heat Exchange
+            } else if (erv_mode_str == "Bypass") {
+                b |= 0x60; // Bypass
+            }
+        } else {
+            // Preserve last received mode if not set
+            b |= (last_recv_status_[2] & 0x60);
+        }
+        send_buf_[2] = b;
+        
+        // Byte 3: Fan speed (bits 7-5)
+        b = last_recv_status_[3] & ~0xE0; // Clear fan speed bits (preserve lower bits)
+        if (this->fan_mode.has_value()) {
+            switch (this->fan_mode.value()) {
+                case climate::CLIMATE_FAN_LOW:
+                    b |= 0x20;
+                    break;
+                case climate::CLIMATE_FAN_MEDIUM:
+                    b |= 0x40;
+                    break;
+                case climate::CLIMATE_FAN_HIGH:
+                    b |= 0x60;
+                    break;
+                case climate::CLIMATE_FAN_AUTO:
+                    b |= 0x80;
+                    break;
+                default:
+                    b |= 0x40; // Default to Medium
+                    break;
+            }
+        } else {
+            // Preserve last received fan speed
+            b |= (last_recv_status_[3] & 0xE0);
+        }
+        send_buf_[3] = b;
+        
+        // Byte 5: Add mode from preset (Add Off = 0x00, Add Fast = 0x02, Add eSave = 0x01)
+        // Preset None = Add Off, Preset Boost = Add Fast, Preset ECO = Add eSave
+        b = last_recv_status_[5] & ~0x03; // Clear Add mode bits
+        if (this->preset.has_value()) {
+            if (this->preset.value() == climate::CLIMATE_PRESET_BOOST) {
+                b |= 0x02; // Add Fast
+            } else if (this->preset.value() == climate::CLIMATE_PRESET_ECO) {
+                b |= 0x01; // Add eSave
+            } else {
+                b |= 0x00; // Add Off (CLIMATE_PRESET_NONE)
+            }
+        } else {
+            // Preserve last received Add mode if no preset set
+            b |= (last_recv_status_[5] & 0x03);
+        }
+        send_buf_[5] = b;
+        
+        // Byte 12: Checksum
+        send_buf_[12] = calc_checksum(send_buf_);
+        
+        ESP_LOGD(TAG, "sending ERV %s", format_hex_pretty(send_buf_, MsgLen).c_str());
+        UARTDevice::write_array(send_buf_, MsgLen);
+        
+        pending_status_change_ = false;
+        pending_send_ = PendingSendKind::Status;
+        last_sent_status_millis_ = millis();
+    }
+
     void send_type_a_settings_message() {
         if (last_recv_type_a_settings_[0] != 0xCA && last_recv_type_a_settings_[0] != 0xAA) {
             ESP_LOGE(TAG, "Unexpected missing previous CA/AA message");
@@ -1040,26 +1149,10 @@ private:
         // Check if this is an ERV message (D0 or B0)
         bool is_erv_message_d0 = (buffer[0] == 0xD0);
         bool is_erv_message_b0 = (buffer[0] == 0xB0);
-        uint8_t power_control_byte = buffer[1];
-        bool power_control_on = is_erv_message_d0 && ((power_control_byte & 0x3) == 0x03); // Bit 1 0x03, on request change ON
-        bool power_control_off = is_erv_message_d0 && ((power_control_byte & 0x3) == 0x01); // Bit 1 0x01, on request change OFF
-        if (is_erv_message_d0) {
-            ESP_LOGI(TAG, "Processing ERV status message: D0");
-        } else if (is_erv_message_b0) {
-            ESP_LOGI(TAG, "Processing ERV control message: B0");
-        } else {
-            ESP_LOGD(TAG, "Processing AC status message");
-        }
-        bool incontrol = !power_control_on && !power_control_off;
-
-        if (incontrol) {
-            ESP_LOGI(TAG, "In control mode, control power %s", power_control_on ? "ON" : "OFF");
-            return;
-        }
-
-        if (is_erv_message_d0 || is_erv_message_b0 && !incontrol) {
+        
+        if (is_erv_message_d0 || is_erv_message_b0) {
             // ERV message decoding
-            ESP_LOGW(TAG, "Processing ERV status message: %s", is_erv_message_d0 ? "D0" : "B0");
+            ESP_LOGI(TAG, "Processing ERV status message: %s", is_erv_message_d0 ? "D0" : "B0");
 
             // Consider slave controller initialized if we received a status message from the other
             // controller or the unit.
@@ -1083,9 +1176,10 @@ private:
                 memcpy(last_recv_status_, buffer, MsgLen);
             }
             bool power_on = false;
-            // Byte 1: Power - 0x02 = ON, 0x00 = OFF
+            // Byte 1: Power control - bits 1:0: 0x03 = ON, 0x01 = OFF
             uint8_t power_byte = buffer[1];
-            power_on = (power_byte == 0x02);
+            uint8_t power_bits = power_byte & 0x03;
+            power_on = (power_bits == 0x03);
 
             if (power_on) {
                 // Power is ON, need to decode mode and fan
@@ -1094,26 +1188,26 @@ private:
                 this->mode = climate::CLIMATE_MODE_OFF;
             }
 
-            // Byte 2: Mode - 0x60 = Bypass, 0x20 = Heat Exchange
-            uint8_t mode_byte = buffer[2];
+            // Byte 2: ERV Mode - 0x60 = Bypass, 0x20 = Heat Exchange
+            uint8_t mode_byte = buffer[2] & 0x60;
             const char* mode_str = "Unknown";
-            switch (mode_byte) {
-                case 0x60:
-                    mode_str = "Bypass";
-                    // Keep FAN_ONLY mode for Bypass
-                    break;
-                case 0x20:
-                    mode_str = "Heat Exchange";
-                    // Keep FAN_ONLY mode for Add Esave
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Unknown ERV mode: 0x%02X", mode_byte);
-                    mode_str = "Unknown";
-                    break;
+            std::string erv_mode_value;
+            if (mode_byte == 0x60) {
+                mode_str = "Bypass";
+                erv_mode_value = "Bypass";
+            } else if (mode_byte == 0x20) {
+                mode_str = "Heat Exchange";
+                erv_mode_value = "Heat Exchange";
+            } else {
+                ESP_LOGW(TAG, "Unknown ERV mode: 0x%02X", mode_byte);
+                mode_str = "Unknown";
+            }
+            if (!erv_mode_value.empty()) {
+                erv_mode_.publish_state(erv_mode_value);
             }
 
-            // Byte 3: Fan speed - 0x20 = Low, 0x40 = Medium, 0x60 = High, 0x80 = Auto
-            uint8_t fan_byte = buffer[3];
+            // Byte 3: Fan speed - bits 7-5: 0x20 = Low, 0x40 = Medium, 0x60 = High, 0x80 = Auto
+            uint8_t fan_byte = buffer[3] & 0xE0; // Mask bits 7-5
             const char* fan_str = "Unknown";
             switch (fan_byte) {
                 case 0x20:
@@ -1141,15 +1235,19 @@ private:
             // Bit 1 0x03, on request change ON, Bit 1 0x01, on request change OFF, 2:0x60 H Bypass, 3:0x80 F Auto, 5:0x02: Add Fast
             // Bit 1 0x03, on request change ON, Bit 1 0x01, on request change OFF, 2:0x60 H Bypass, 3:0x80 F Auto, 5:0x01: Add eSave
 
-            // Byte 5: Add Fast setting - 0x01 = ON, 0x00 = OFF
-            uint8_t add_byte = buffer[5];
+            // Byte 5: Add mode - 0x00 = Add Off, 0x02 = Add Fast, 0x01 = Add eSave
+            // Map to presets: Add Off = None, Add Fast = Boost, Add eSave = ECO
+            uint8_t add_byte = buffer[5] & 0x03;
             const char* add_str = "Unknown";
-            if((add_byte & 0x3) == 0x00) {
+            if (add_byte == 0x00) {
                 add_str = "Add Off";
-            } else if((add_byte & 0x3) == 0x02) {
+                this->preset = climate::CLIMATE_PRESET_NONE;
+            } else if (add_byte == 0x02) {
                 add_str = "Add Fast";
-            } else if((add_byte & 0x3) == 0x01) {
+                this->preset = climate::CLIMATE_PRESET_BOOST;
+            } else if (add_byte == 0x01) {
                 add_str = "Add eSave";
+                this->preset = climate::CLIMATE_PRESET_ECO;
             }
 
             // Log ERV decoded data
@@ -1157,9 +1255,8 @@ private:
                      power_on ? "ON" : "OFF", power_byte,
                      mode_str, mode_byte,
                      fan_str, fan_byte, add_str, add_byte);
-#if 0
+            
             publish_state();
-#endif
             return;
         }
 
@@ -1562,7 +1659,7 @@ private:
         }
 
         uint32_t millis_now = millis();
-
+#if 0
         // Handle sleep timer.
         if (sleep_timer_target_millis_.has_value()) {
             int32_t diff = int32_t(sleep_timer_target_millis_.value() - millis_now);
@@ -1584,6 +1681,7 @@ private:
                 }
             }
         }
+#endif
 
         if (slave_ && is_initializing_) {
             ESP_LOGD(TAG, "Not sending, waiting for other controller or unit to send first");
@@ -1602,12 +1700,11 @@ private:
         //
         // 500 ms might be overkill, but the device usually sends the same message twice with a
         // short delay (about 200 ms?) between them so let's not send there either to avoid
-        // collisions.
-#if 0        
+        // collisions.      
         auto check_can_send = [&]() -> bool {
             while (true) {
                 if (UARTDevice::available() > 0 || !rx_pin_.digital_read()) {
-                    ESP_LOGD(TAG, "line busy, not sending yet");
+                    ESP_LOGW(TAG, "line busy, not sending yet");
                     return false;
                 }
                 if (millis() - millis_now > 500) {
@@ -1616,7 +1713,7 @@ private:
                 delay(5);
             }
         };
-
+#if 0  
         if (pending_type_a_settings_change_) {
             if (check_can_send()) {
                 send_type_a_settings_message();
@@ -1629,6 +1726,7 @@ private:
             }
             return;
         }
+#endif        
         // Send a status message if there is a pending change.
         // Additionally, queue a Type A message after sending the status message because some
         // units set the vane position to the default setting after changing swing mode or
@@ -1636,10 +1734,13 @@ private:
         if (pending_status_change_) {
             if (check_can_send()) {
                 send_status_message();
+#if 0
                 pending_type_a_settings_change_ = true;
+#endif
             }
             return;
         }
+#if 0
         // Send an AB message every 10 minutes to request pipe temperature values.
         if (!slave_ && millis_now - last_sent_recv_type_b_millis_ > 10 * 60 * 1000) {
             if (check_can_send()) {
@@ -1647,6 +1748,7 @@ private:
             }
             return;
         }
+#endif
         // Send a status message every 20 seconds.
         // Slave controllers only send this if needed.
         if (!slave_ && millis_now - last_sent_status_millis_ > 20 * 1000) {
@@ -1655,7 +1757,6 @@ private:
             }
             return;
         }
-#endif
     }
 };
 

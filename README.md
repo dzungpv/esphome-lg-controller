@@ -1,5 +1,5 @@
 # ESPHome LG AC Wired Controller
-Wired controller for LG Air Conditioners using an ESP32 microcontroller and [ESPHome](https://esphome.io/). It can be used to control an indoor unit from [Home Assistant](https://www.home-assistant.io/).
+Wired controller for LG Air Conditioners and ERV/HRV units using an ESP32 microcontroller and [ESPHome](https://esphome.io/). It can be used to control an indoor unit or ERV/HRV system from [Home Assistant](https://www.home-assistant.io/).
 
 This has some advantages compared to the [LG ThinQ integration](https://github.com/ollo69/ha-smartthinq-sensors):
 * Can override the unit's room temperature thermistor with a Home Assistant temperature sensor.
@@ -15,6 +15,14 @@ This has some advantages compared to the [LG ThinQ integration](https://github.c
 If your indoor unit supports the LG PREMTB100 and/or LG PREMTA200 controller, it will very likely be compatible.
 
 The [wiki](https://github.com/JanM321/esphome-lg-controller/wiki) has a list of LG AC units that have been tested with this controller.
+
+### Supported ERV/HRV units
+The controller also supports LG ERV (Energy Recovery Ventilator) and HRV (Heat Recovery Ventilator) units that use the `0xB0`/`0xD0` message protocol. These units support:
+- Fan speed control (Low, Medium, High, Auto)
+- ERV mode selection (Bypass or Heat Exchange)
+- Add mode presets (Add Off, Add Fast, Add eSave)
+
+See [protocol.md](protocol.md) for detailed information about the ERV message format.
 
 ### Multiple controllers
 It's possible to connect multiple controllers to a single indoor unit, but one of them must be set as 'master' and the others as 'slave'. Since February 2024, this ESPHome controller has experimental support for this. I'm not using this myself, so there might be some issues with this (please report them).
@@ -97,6 +105,8 @@ If you just want to connect to the device to view the debug logs, use `esphome l
 
 # Features
 Features currently available in Home Assistant:
+
+**For AC Units:**
 * Operation mode (off, auto, cool, heat, dry/dehumidify, fan only).
 * Target temperature (0.5°C steps).
 * Use of a Home Assistant temperature sensor for room temperature (rounded to nearest 0.5°C). 
@@ -113,6 +123,15 @@ Features currently available in Home Assistant:
 * Select option for over heating installer setting from 0-4 (to change over heating behavior in heating mode). This is installer setting 15 (Over Heating) on LG controllers.
 * YAML options for Fahrenheit mode and 'slave' controller mode.
 * Detects & exposes only supported capabilities for the connected indoor unit.
+
+**For ERV/HRV Units:**
+* Operation mode (off, fan only).
+* Fan speed (low, medium, high, auto).
+* ERV mode select (Bypass or Heat Exchange).
+* Preset modes for Add functionality:
+  - None (Add Off)
+  - Boost (Add Fast)
+  - ECO (Add eSave)
 
 The LG ThinQ app and wireless remote can still be used to change these settings and other settings. They'll be synchronized with this controller.
 

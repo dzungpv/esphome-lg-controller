@@ -33,7 +33,9 @@ The two "product type" bits are always set to `01` for normal HVAC units. This m
 
 For instance, `0xC8` is a status message sent by the AC unit. `0xAA` is a settings message sent by the controller.
 
-LG controllers send messages with the product type field set to 0 or 2 only when connected to a ventilation product responding with such messages. For example if a heat exchanger unit responds with `0xD0` messages, the LG controllers will switch from sending `0xA8` to `0xB0` messages. This documentation and the ESPHome controller only cover AC units.
+LG controllers send messages with the product type field set to 0 or 2 only when connected to a ventilation product responding with such messages. For example if a heat exchanger unit responds with `0xD0` messages, the LG controllers will switch from sending `0xA8` to `0xB0` messages. 
+
+**ERV/HRV Support**: The ESPHome controller now supports ERV (Energy Recovery Ventilator) and HRV (Heat Recovery Ventilator) units that use `0xB0` (master controller) and `0xD0` (unit/slave controller) message types. See the ERV Status Message section below for details.
 
 The last byte of each message is a checksum, computed by adding up the other bytes and XOR'ing with `0x55`.
 
@@ -352,3 +354,61 @@ CF.00.12.34.56.00.00.00.00.00.00.00.3E => 123.5 kW
 CF.00.98.76.54.00.00.00.00.00.00.00.64 => 987.7 kW
 CF.00.AB.CD.EF.00.00.00.00.00.00.00.63 => 1123.5 kW
 ```
+
+## ERV/HRV Status Message (0xB0/0xD0)
+ERV (Energy Recovery Ventilator) and HRV (Heat Recovery Ventilator) units use a different message format than standard AC units. The message type is `0xB0` for master controllers and `0xD0` for the unit or slave controllers.
+
+Example message: `B0.03.60.20.00.00.00.00.00.00.00.00.66`
+
+| Byte | Bits | Description | ESPHome Mapping |
+| --- | --- | --- | --- |
+| 0 | `XXXX_XXXX` | Message type<br>`0xB0` = master controller<br>`0xD0` = unit/slave controller | Message source identifier |
+| 1 | `0000_000X` | Change flag (set when settings changed) | Used internally |
+|   | `0000_00XX` | Power control<br>`0x03` = Power ON<br>`0x01` = Power OFF | `climate.mode`<br>`CLIMATE_MODE_FAN_ONLY` (ON)<br>`CLIMATE_MODE_OFF` (OFF) |
+| 2 | `00XX_0000` | ERV Mode<br>`0x60` = Bypass<br>`0x20` = Heat Exchange | `select.erv_mode`<br>"Bypass" or "Heat Exchange" |
+| 3 | `XXX0_0000` | Fan speed (bits 7-5)<br>`0x20` = Low<br>`0x40` = Medium<br>`0x60` = High<br>`0x80` = Auto | `climate.fan_mode`<br>`CLIMATE_FAN_LOW`<br>`CLIMATE_FAN_MEDIUM`<br>`CLIMATE_FAN_HIGH`<br>`CLIMATE_FAN_AUTO` |
+| 4 | `XXXX_XXXX` | Reserved/Unknown | Not used |
+| 5 | `0000_00XX` | Add mode (bits 1:0)<br>`0x00` = Add Off<br>`0x02` = Add Fast<br>`0x01` = Add eSave | `climate.preset`<br>`CLIMATE_PRESET_NONE` (Add Off)<br>`CLIMATE_PRESET_BOOST` (Add Fast)<br>`CLIMATE_PRESET_ECO` (Add eSave) |
+| 6-11 | `XXXX_XXXX` | Reserved/Unknown | Not used |
+| 12 | `XXXX_XXXX` | Checksum | Calculated as sum of bytes 0-11 XOR 0x55 |
+
+### ESPHome Entity Mapping
+
+The ERV/HRV controller maps protocol values to ESPHome entities as follows:
+
+**Climate Component:**
+- **Mode**: `CLIMATE_MODE_OFF` (power off) or `CLIMATE_MODE_FAN_ONLY` (power on)
+- **Fan Mode**: Controls fan speed (Low, Medium, High, Auto)
+- **Preset**: Controls Add mode functionality
+  - `CLIMATE_PRESET_NONE` → Add Off (0x00)
+  - `CLIMATE_PRESET_BOOST` → Add Fast (0x02)
+  - `CLIMATE_PRESET_ECO` → Add eSave (0x01)
+
+**Select Entity:**
+- **erv_mode**: Controls ERV operation mode
+  - "Bypass" → 0x60
+  - "Heat Exchange" → 0x20
+
+### Message Flow
+
+1. **Receiving ERV Status** (`0xD0` from unit):
+   - Byte 1 bits 1:0 = `0x03` → Set climate mode to `FAN_ONLY`
+   - Byte 1 bits 1:0 = `0x01` → Set climate mode to `OFF`
+   - Byte 2 bits 6:5 = `0x60` → Update `erv_mode` select to "Bypass"
+   - Byte 2 bits 6:5 = `0x20` → Update `erv_mode` select to "Heat Exchange"
+   - Byte 3 bits 7:5 = Fan speed → Update `climate.fan_mode`
+   - Byte 5 bits 1:0 = Add mode → Update `climate.preset`
+
+2. **Sending ERV Status** (`0xB0` from master controller):
+   - `climate.mode` → Byte 1 power bits
+   - `select.erv_mode` → Byte 2 ERV mode bits
+   - `climate.fan_mode` → Byte 3 fan speed bits
+   - `climate.preset` → Byte 5 Add mode bits
+
+### Notes
+
+- ERV units only support fan operation (no cooling/heating modes)
+- Temperature control is not applicable for ERV/HRV units
+- The Add modes (Off, Fast, eSave) provide additional ventilation options
+- Bypass mode allows fresh air without heat exchange
+- Heat Exchange mode recovers energy from exhaust air

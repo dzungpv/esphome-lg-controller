@@ -148,3 +148,7 @@ climate:
       name: Auto Dry
       id: auto_dry
       icon: mdi:fan-clock
+    erv_mode:
+      name: ERV Mode
+      id: erv_mode
+      icon: mdi:air-conditioner

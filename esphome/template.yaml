@@ -13,7 +13,7 @@ substitutions:
   # configured as "master controller". Slave mode is a new and experimental feature for this
   # ESPHome controller and might not work well.
   # If you're connecting a single controller, this should be set to "false".
-  is_slave_controller: "false"
+  is_slave_controller: "true"
 
 # Encryption key for HA. See https://esphome.io/components/api.html.
 api:
