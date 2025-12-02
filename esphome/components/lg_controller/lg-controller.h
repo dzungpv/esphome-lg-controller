@@ -2,6 +2,9 @@
 
 #include "esphome.h"
 #include "esphome/components/uart/uart.h"
+#include "esphome/components/select/select.h"
+#include "esphome/components/number/number.h"
+#include "esphome/components/climate/climate.h"
 
 static const char* const TAG = "lg-controller";
 
@@ -9,20 +12,6 @@ namespace esphome::lg_controller {
 
 static constexpr size_t MIN_TEMP_SETPOINT = 16;
 static constexpr size_t MAX_TEMP_SETPOINT = 30;
-
-class LgSwitch final : public switch_::Switch {
-    void write_state(bool value) override {
-        publish_state(value);
-    }
-
-public:
-    void restore_and_set_mode(switch_::SwitchRestoreMode mode) {
-        set_restore_mode(mode);
-        if (auto state = get_initial_state_with_restore_mode()) {
-            write_state(*state);
-        }
-    }
-};
 
 class LgSelect final : public select::Select {
     void control(const std::string& value) override {

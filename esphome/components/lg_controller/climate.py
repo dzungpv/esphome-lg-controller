@@ -1,12 +1,12 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
-from esphome.components import climate, number, select, switch, uart
+from esphome.components import climate, number, select, uart
 from esphome.const import CONF_ID, CONF_RX_PIN
 
 CODEOWNERS = ["JanM321"]
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["number", "switch", "select"]
+AUTO_LOAD = ["number", "select"]
 
 lg_controller_ns = cg.esphome_ns.namespace("lg_controller")
 LgController = lg_controller_ns.class_(
@@ -14,7 +14,6 @@ LgController = lg_controller_ns.class_(
 )
 LgNumber = lg_controller_ns.class_("LgNumber", number.Number, cg.Component)
 LgSelect = lg_controller_ns.class_("LgSelect", select.Select, cg.Component)
-LgSwitch = lg_controller_ns.class_("LgSwitch", switch.Switch, cg.Component)
 
 CONF_FAHRENHEIT = "fahrenheit"
 CONF_IS_SLAVE_CONTROLLER = "is_slave_controller"
