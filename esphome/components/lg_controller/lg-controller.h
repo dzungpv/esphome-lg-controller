@@ -1037,12 +1037,29 @@ private:
             return;
         }
 
-        // Check if this is an ERV message (D0)
-        bool is_erv_message = (buffer[0] == 0xD0);
+        // Check if this is an ERV message (D0 or B0)
+        bool is_erv_message_d0 = (buffer[0] == 0xD0);
+        bool is_erv_message_b0 = (buffer[0] == 0xB0);
+        uint8_t power_control_byte = buffer[1];
+        bool power_control_on = is_erv_message_d0 && ((power_control_byte & 0x3) == 0x03); // Bit 1 0x03, on request change ON
+        bool power_control_off = is_erv_message_d0 && ((power_control_byte & 0x3) == 0x01); // Bit 1 0x01, on request change OFF
+        if (is_erv_message_d0) {
+            ESP_LOGI(TAG, "Processing ERV status message: D0");
+        } else if (is_erv_message_b0) {
+            ESP_LOGI(TAG, "Processing ERV control message: B0");
+        } else {
+            ESP_LOGD(TAG, "Processing AC status message");
+        }
+        bool incontrol = !power_control_on && !power_control_off;
 
-        if (is_erv_message) {
+        if (incontrol) {
+            ESP_LOGI(TAG, "In control mode, control power %s", power_control_on ? "ON" : "OFF");
+            return;
+        }
+
+        if (is_erv_message_d0 || is_erv_message_b0 && !incontrol) {
             // ERV message decoding
-            ESP_LOGD(TAG, "Processing ERV status message");
+            ESP_LOGW(TAG, "Processing ERV status message: %s", is_erv_message_d0 ? "D0" : "B0");
 
             // Consider slave controller initialized if we received a status message from the other
             // controller or the unit.
@@ -1065,10 +1082,11 @@ private:
             if (sender != MessageSender::Slave) {
                 memcpy(last_recv_status_, buffer, MsgLen);
             }
-
-            // Byte 1: Power - 0x03 = ON, 0x01 = OFF
+            bool power_on = false;
+            // Byte 1: Power - 0x02 = ON, 0x00 = OFF
             uint8_t power_byte = buffer[1];
-            bool power_on = (power_byte == 0x03);
+            power_on = (power_byte == 0x02);
+
             if (power_on) {
                 // Power is ON, need to decode mode and fan
                 this->mode = climate::CLIMATE_MODE_FAN_ONLY;
@@ -1076,17 +1094,13 @@ private:
                 this->mode = climate::CLIMATE_MODE_OFF;
             }
 
-            // Byte 2: Mode - 0x60 = Bypass, 0x40 = Add Fast, 0x20 = Heat Exchange
+            // Byte 2: Mode - 0x60 = Bypass, 0x20 = Heat Exchange
             uint8_t mode_byte = buffer[2];
             const char* mode_str = "Unknown";
             switch (mode_byte) {
                 case 0x60:
                     mode_str = "Bypass";
                     // Keep FAN_ONLY mode for Bypass
-                    break;
-                case 0x40:
-                    mode_str = "Add Fast";
-                    // Keep FAN_ONLY mode for Add Fast
                     break;
                 case 0x20:
                     mode_str = "Heat Exchange";
@@ -1098,7 +1112,7 @@ private:
                     break;
             }
 
-            // Byte 3: Fan speed - 0x20 = Low, 0x40 = Medium, 0x60 = High, 0x80 = Add Fast or Auto
+            // Byte 3: Fan speed - 0x20 = Low, 0x40 = Medium, 0x60 = High, 0x80 = Auto
             uint8_t fan_byte = buffer[3];
             const char* fan_str = "Unknown";
             switch (fan_byte) {
@@ -1124,12 +1138,25 @@ private:
                     fan_str = "Unknown (defaulted to Medium)";
                     break;
             }
+            // Bit 1 0x03, on request change ON, Bit 1 0x01, on request change OFF, 2:0x60 H Bypass, 3:0x80 F Auto, 5:0x02: Add Fast
+            // Bit 1 0x03, on request change ON, Bit 1 0x01, on request change OFF, 2:0x60 H Bypass, 3:0x80 F Auto, 5:0x01: Add eSave
+
+            // Byte 5: Add Fast setting - 0x01 = ON, 0x00 = OFF
+            uint8_t add_byte = buffer[5];
+            const char* add_str = "Unknown";
+            if((add_byte & 0x3) == 0x00) {
+                add_str = "Add Off";
+            } else if((add_byte & 0x3) == 0x02) {
+                add_str = "Add Fast";
+            } else if((add_byte & 0x3) == 0x01) {
+                add_str = "Add eSave";
+            }
 
             // Log ERV decoded data
-            ESP_LOGW(TAG, "ERV Status - Power: %s (0x%02X), Mode: %s (0x%02X), Fan: %s (0x%02X)",
+            ESP_LOGW(TAG, "ERV Status - Power: %s (0x%02X), Mode: %s (0x%02X), Fan: %s (0x%02X), Add: %s (0x%02X)",
                      power_on ? "ON" : "OFF", power_byte,
                      mode_str, mode_byte,
-                     fan_str, fan_byte);
+                     fan_str, fan_byte, add_str, add_byte);
 #if 0
             publish_state();
 #endif
