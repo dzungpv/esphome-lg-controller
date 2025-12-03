@@ -392,6 +392,7 @@ public:
         set_timeout("initial_send", 10000, [this]() {
             set_interval("update", 6000, [this]() { update(); });
         });
+        ESP_LOGI(TAG, "Starting LG Controller - Slave mode: %s", slave_ ? "enabled" : "disabled");
     }
 
     // Process changes from HA.
@@ -642,8 +643,7 @@ private:
         memcpy(send_buf_, last_recv_status_, MsgLen);
         
         // Byte 0: message type (B0 for master, 30 for slave, this is guest base on 0x80 of the AC 0x28 and 0xA8)
-        // send_buf_[0] = slave_ ? 0x30 : 0xB0;
-        send_buf_[0] = 0x30;
+        send_buf_[0] = slave_ ? 0x30 : 0xB0;
 
         // Byte 1: Power control and change flag
         // For 0xB0 (master command): 0x03 = ON, 0x01 = OFF

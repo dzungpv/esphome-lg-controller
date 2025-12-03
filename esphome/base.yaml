@@ -54,7 +54,8 @@ climate:
       number: GPIO17 # Keep in sync with rx_pin above.
       allow_other_uses: true
     fahrenheit: false
-    is_slave_controller: false
+    # Now ERV only supports slave controller mode.
+    is_slave_controller: true
     fan_speed_slow:
       name: Fan Speed Slow
       id: fan_speed_slow
