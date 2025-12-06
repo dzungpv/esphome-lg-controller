@@ -5,6 +5,7 @@
 #include "esphome/components/select/select.h"
 #include "esphome/components/number/number.h"
 #include "esphome/components/climate/climate.h"
+#include "esphome/components/sensor/sensor.h"
 
 static const char* const TAG = "lg-controller";
 
@@ -130,6 +131,8 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
     LgNumber& fan_speed_high_;
 
     LgSelect& erv_mode_;
+
+    esphome::sensor::Sensor* co2_sensor_;
 
     uint8_t recv_buf_[MsgLen] = {};
     uint32_t recv_buf_len_ = 0;
@@ -329,6 +332,7 @@ public:
                  LgNumber* fan_speed_medium,
                  LgNumber* fan_speed_high,
                  LgSelect* erv_mode,
+                 sensor::Sensor* co2_sensor,
                  bool fahrenheit, bool is_slave_controller)
       : rx_pin_(*rx_pin),
         fan_speed_slow_(*fan_speed_slow),
@@ -336,6 +340,7 @@ public:
         fan_speed_medium_(*fan_speed_medium),
         fan_speed_high_(*fan_speed_high),
         erv_mode_(*erv_mode),
+        co2_sensor_(co2_sensor),
         fahrenheit_(fahrenheit),
         slave_(is_slave_controller)
     {
@@ -400,14 +405,8 @@ public:
         if (call.get_mode().has_value()) {
             this->mode = *call.get_mode();
         }
-        if (call.get_target_temperature().has_value()) {
-            this->target_temperature = *call.get_target_temperature();
-        }
         if (call.get_fan_mode().has_value()) {
             this->fan_mode = *call.get_fan_mode();
-        }
-        if (call.get_swing_mode().has_value()) {
-            set_swing_mode(*call.get_swing_mode());
         }
         if (call.get_preset().has_value()) {
             this->preset = *call.get_preset();
@@ -810,6 +809,11 @@ private:
 
         // Determine message type.
         optional<MessageSender> sender;
+        // Check for B4 message (CO2 and temperature data)
+        if (buffer[0] == 0xB4) {
+            process_b4_message(buffer);
+            return;
+        }
         // Check for ERV message (D0 or B0) first
         if (buffer[0] == 0xD0 || buffer[0] == 0xB0) {
             sender = MessageSender::Unit;
@@ -856,6 +860,31 @@ private:
                 return;
         }
 #endif
+    }
+
+    void process_b4_message(const uint8_t* buffer) {
+        // B4 message contains CO2 level and room temperature
+        // CO2: byte[1] + (byte[2] << 8)
+        // Temperature: byte[7] / 2.0
+        
+        uint16_t co2 = buffer[1] + (buffer[2] << 8);
+        float temp_c = buffer[7] / 2.0f;
+        
+        ESP_LOGI(TAG, "B4 message - CO2: %u ppm, Temperature: %.1f°C", co2, temp_c);
+        
+        // Update CO2 sensor
+        if (co2_sensor_ != nullptr) {
+            co2_sensor_->publish_state(co2);
+        }
+        
+        // Update room temperature in climate component
+        if (fahrenheit_) {
+            float temp_f = esphome::celsius_to_fahrenheit(temp_c);
+            this->current_temperature = temp_f;
+        } else {
+            this->current_temperature = temp_c;
+        }
+        publish_state();
     }
 
     void process_status_message(MessageSender sender, const uint8_t* buffer, bool* had_error) {

@@ -1,12 +1,12 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
-from esphome.components import climate, number, select, uart
+from esphome.components import climate, number, select, sensor, uart
 from esphome.const import CONF_ID, CONF_RX_PIN
 
 CODEOWNERS = ["JanM321"]
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["number", "select"]
+AUTO_LOAD = ["number", "select", "sensor"]
 
 lg_controller_ns = cg.esphome_ns.namespace("lg_controller")
 LgController = lg_controller_ns.class_(
@@ -24,6 +24,7 @@ CONF_FAN_SPEED_MEDIUM = "fan_speed_medium"
 CONF_FAN_SPEED_HIGH = "fan_speed_high"
 
 CONF_ERV_MODE = "erv_mode"
+CONF_CO2 = "co2"
 
 ERV_MODE_OPTIONS = ["Bypass", "Heat Exchange"]
 
@@ -40,6 +41,7 @@ CONFIG_SCHEMA = climate.climate_schema(LgController).extend(
         cv.Required(CONF_FAN_SPEED_HIGH): number.number_schema(LgNumber),
 
         cv.Required(CONF_ERV_MODE): select.select_schema(LgSelect),
+        cv.Optional(CONF_CO2): cv.use_id(sensor.Sensor),
     }
 ).extend(cv.COMPONENT_SCHEMA).extend(uart.UART_DEVICE_SCHEMA)
 
@@ -53,9 +55,15 @@ async def to_code(config):
 
     erv_mode = await select.new_select(config[CONF_ERV_MODE], options=ERV_MODE_OPTIONS)
 
+    if CONF_CO2 in config:
+        co2_sensor = await cg.get_variable(config[CONF_CO2])
+    else:
+        co2_sensor = cg.nullptr
+
     var = cg.new_Pvariable(config[CONF_ID], rx_pin,
                            fan_speed_slow, fan_speed_low, fan_speed_medium, fan_speed_high,
                            erv_mode,
+                           co2_sensor,
                            config[CONF_FAHRENHEIT], config[CONF_IS_SLAVE_CONTROLLER])
     await climate.register_climate(var, config)
     await cg.register_component(var, config)

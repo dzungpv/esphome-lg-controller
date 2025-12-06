@@ -39,6 +39,14 @@ sensor:
   - platform: uptime
     type: timestamp
     name: Last Boot
+  - platform: template
+    id: co2_sensor
+    name: "${devicename} CO2 Level"
+    unit_of_measurement: "ppm"
+    icon: mdi:molecule-co2
+    accuracy_decimals: 0
+    lambda: |-
+      return 0; // Will be updated by lg_controller component
 
 external_components:
   - source: components
@@ -80,3 +88,4 @@ climate:
       name: ERV Mode
       id: erv_mode
       icon: mdi:air-conditioner
+    co2: co2_sensor
