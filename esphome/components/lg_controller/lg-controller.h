@@ -189,8 +189,6 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
         MODE_FAN,
         MODE_AUTO,
         MODE_DEHUMIDIFY,
-        VERTICAL_SWING,
-        HORIZONTAL_SWING,
         HAS_ESP_VALUE_SETTING,
     };
 
@@ -218,10 +216,6 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
                 return (nvs_storage_.capabilities_message[2] & 0x08) != 0;
             case LgCapability::MODE_DEHUMIDIFY:
                 return (nvs_storage_.capabilities_message[2] & 0x80) != 0;
-            case LgCapability::VERTICAL_SWING:
-                return (nvs_storage_.capabilities_message[1] & 0x80) != 0;
-            case LgCapability::HORIZONTAL_SWING:
-                return (nvs_storage_.capabilities_message[1] & 0x40) != 0;
             case LgCapability::HAS_ESP_VALUE_SETTING:
                 return (nvs_storage_.capabilities_message[4] & 0x02) != 0;
         }
@@ -244,17 +238,10 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
         preset_modes.insert(climate::CLIMATE_PRESET_NONE);
         preset_modes.insert(climate::CLIMATE_PRESET_BOOST);
         preset_modes.insert(climate::CLIMATE_PRESET_ECO);
-        
-        climate::ClimateSwingModeMask swing_modes;
-        swing_modes.insert(climate::CLIMATE_SWING_OFF);
-        swing_modes.insert(climate::CLIMATE_SWING_BOTH);
-        swing_modes.insert(climate::CLIMATE_SWING_VERTICAL);
-        swing_modes.insert(climate::CLIMATE_SWING_HORIZONTAL);
 
         supported_traits_.set_supported_modes(device_modes);
         supported_traits_.set_supported_fan_modes(fan_modes);
         supported_traits_.set_supported_presets(preset_modes);
-        supported_traits_.set_supported_swing_modes(swing_modes);
         supported_traits_.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE);
         supported_traits_.set_visual_min_temperature(MIN_TEMP_SETPOINT);
         supported_traits_.set_visual_max_temperature(MAX_TEMP_SETPOINT);
@@ -289,16 +276,6 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
             if (parse_capability(LgCapability::FAN_HIGH))
                 override_fan_modes.insert(climate::CLIMATE_FAN_HIGH);
             supported_traits_.set_supported_fan_modes(override_fan_modes);
-
-            climate::ClimateSwingModeMask override_swing_modes;
-            override_swing_modes.insert(climate::CLIMATE_SWING_OFF);
-            if (parse_capability(LgCapability::VERTICAL_SWING) && parse_capability(LgCapability::HORIZONTAL_SWING))
-                override_swing_modes.insert(climate::CLIMATE_SWING_BOTH);
-            if (parse_capability(LgCapability::VERTICAL_SWING))
-                override_swing_modes.insert(climate::CLIMATE_SWING_VERTICAL);
-            if (parse_capability(LgCapability::HORIZONTAL_SWING))
-                override_swing_modes.insert(climate::CLIMATE_SWING_HORIZONTAL);
-            supported_traits_.set_supported_swing_modes(override_swing_modes);
 
             // Disable unsupported entities
             fan_speed_slow_.set_internal(true);
@@ -379,7 +356,6 @@ public:
             this->mode = climate::CLIMATE_MODE_OFF;
             this->target_temperature = 20;
             this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
-            this->swing_mode = climate::CLIMATE_SWING_OFF;
             this->preset = climate::CLIMATE_PRESET_NONE;
             this->publish_state();
         }
@@ -447,10 +423,6 @@ private:
             result += buffer[i];
         }
         return (result & 0xff) ^ 0x55;
-    }
-
-    void set_swing_mode(climate::ClimateSwingMode mode) {
-        this->swing_mode = mode;
     }
 
     void send_status_message() {
@@ -529,25 +501,8 @@ private:
         }
         send_buf_[1] = b;
 
-        // Byte 2: swing mode. Preserve the other bits.
-        b = last_recv_status_[2] & ~(0x40|0x80);
-        switch (this->swing_mode) {
-            case climate::CLIMATE_SWING_OFF:
-                break;
-            case climate::CLIMATE_SWING_HORIZONTAL:
-                b |= 0x40;
-                break;
-            case climate::CLIMATE_SWING_VERTICAL:
-                b |= 0x80;
-                break;
-            case climate::CLIMATE_SWING_BOTH:
-                b |= 0x40 | 0x80;
-                break;
-            default:
-                ESP_LOGE(TAG, "unknown swing mode");
-                break;
-        }
-        send_buf_[2] = b;
+        // Byte 2. Preserve the other bits.
+        send_buf_[2] = last_recv_status_[2];
 
         // Byte 3.
         send_buf_[3] = last_recv_status_[3];
@@ -1114,18 +1069,6 @@ private:
                 ESP_LOGE(TAG, "received unexpected fan mode from AC (%u)", fan_val);
                 *had_error = true;
                 return;
-        }
-
-        bool horiz_swing = buffer[2] & 0x40;
-        bool vert_swing = buffer[2] & 0x80;
-        if (horiz_swing && vert_swing) {
-            set_swing_mode(climate::CLIMATE_SWING_BOTH);
-        } else if (horiz_swing) {
-            set_swing_mode(climate::CLIMATE_SWING_HORIZONTAL);
-        } else if (vert_swing) {
-            set_swing_mode(climate::CLIMATE_SWING_VERTICAL);
-        } else {
-            set_swing_mode(climate::CLIMATE_SWING_OFF);
         }
 
         float target = float((buffer[6] & 0xf) + 15);

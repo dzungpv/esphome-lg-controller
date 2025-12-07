@@ -1,6 +1,9 @@
 esphome:
   name: ${deviceid}
   friendly_name: ${devicename}
+  project:
+    name: lg.erv-controller
+    version: "0.9.0"
 
 esp32:
   #board: esp32dev
