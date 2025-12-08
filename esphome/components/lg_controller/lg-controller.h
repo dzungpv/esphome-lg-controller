@@ -149,14 +149,11 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
 
     uint8_t send_buf_[MsgLen] = {};
     uint32_t last_sent_status_millis_ = 0;
-    uint32_t last_sent_recv_type_b_millis_ = 0;
 
-    enum class PendingSendKind : uint8_t { None, Status, TypeA, TypeB };
+    enum class PendingSendKind : uint8_t { None, Status };
     PendingSendKind pending_send_ = PendingSendKind::None;
 
     bool pending_status_change_ = false;
-    bool pending_type_a_settings_change_ = false;
-    bool pending_type_b_settings_change_ = false;
 
     bool is_initializing_ = true;
 
@@ -413,7 +410,7 @@ private:
 
         fan_speed_[index] = value;
         if (!is_initializing_) {
-            pending_type_a_settings_change_ = true;
+            pending_status_change_ = true;
         }
     }
 
@@ -436,160 +433,6 @@ private:
             send_erv_status_message();
             return;
         }
-#if 0
-        // Byte 0: message type.
-        send_buf_[0] = slave_ ? 0x28 : 0xA8;
-
-        // Byte 1: changed flag (0x1), power on (0x2), mode (0x1C), fan speed (0x70).
-        uint8_t b = 0;
-        if (pending_status_change_) {
-            b |= 0x1;
-        }
-        switch (this->mode) {
-            case climate::CLIMATE_MODE_COOL:
-                b |= (0 << 2) | 0x2;
-                break;
-            case climate::CLIMATE_MODE_DRY:
-                b |= (1 << 2) | 0x2;
-                break;
-            case climate::CLIMATE_MODE_FAN_ONLY:
-                b |= (2 << 2) | 0x2;
-                break;
-            case climate::CLIMATE_MODE_HEAT_COOL:
-                b |= (3 << 2) | 0x2;
-                break;
-            case climate::CLIMATE_MODE_HEAT:
-                b |= (4 << 2) | 0x2;
-                break;
-            case climate::CLIMATE_MODE_OFF:
-                // Don't set power-on flag, but preserve previous operation mode.
-                b |= (last_recv_status_[1] & 0x1C);
-                break;
-            default:
-                ESP_LOGE(TAG, "unknown operation mode, turning off");
-                b |= (2 << 2);
-                break;
-        }
-        
-        // Fix: Check if fan_mode has a value before dereferencing
-        if (this->fan_mode.has_value()) {
-            switch (this->fan_mode.value()) {
-                case climate::CLIMATE_FAN_LOW:
-                    b |= 0 << 5;
-                    break;
-                case climate::CLIMATE_FAN_MEDIUM:
-                    b |= 1 << 5;
-                    break;
-                case climate::CLIMATE_FAN_HIGH:
-                    b |= 2 << 5;
-                    break;
-                case climate::CLIMATE_FAN_AUTO:
-                    b |= 3 << 5;
-                    break;
-                case climate::CLIMATE_FAN_QUIET:
-                    b |= 4 << 5;
-                    break;
-                default:
-                    ESP_LOGE(TAG, "unknown fan mode, using Medium");
-                    b |= 1 << 5;
-                    break;
-            }
-        } else {
-            // Default to Medium if no fan mode is set
-            ESP_LOGD(TAG, "no fan mode set, using Medium as default");
-            b |= 1 << 5;
-        }
-        send_buf_[1] = b;
-
-        // Byte 2. Preserve the other bits.
-        send_buf_[2] = last_recv_status_[2];
-
-        // Byte 3.
-        send_buf_[3] = last_recv_status_[3];
-        if (active_reservation_) {
-            send_buf_[3] |= 0x10;
-        } else {
-            send_buf_[3] &= ~0x10;
-        }
-
-        // Byte 4.
-        send_buf_[4] = last_recv_status_[4];
-
-        float target = this->target_temperature;
-        if (fahrenheit_) {
-            target = TempConversion::celsius_to_lgcelsius(target);
-        }
-        if (target < MIN_TEMP_SETPOINT) {
-            target = MIN_TEMP_SETPOINT;
-        } else if (target > MAX_TEMP_SETPOINT) {
-            target = MAX_TEMP_SETPOINT;
-        }
-
-        // Byte 5. Unchanged except for the low bit which indicates the target temperature has a
-        // 0.5 fractional part.
-        send_buf_[5] = last_recv_status_[5] & ~0x1;
-        if (target - uint8_t(target) == 0.5) {
-            send_buf_[5] |= 0x1;
-        }
-
-        // Byte 6: thermistor setting and target temperature (fractional part in byte 5).
-        // Byte 7: room temperature. Preserve the (unknown) upper two bits.
-        enum ThermistorSetting { Unit = 0, Controller = 1, TwoTH = 2 };
-        ThermistorSetting thermistor =
-            internal_thermistor_.state ? ThermistorSetting::Unit : ThermistorSetting::Controller;
-        float temp;
-        if (auto maybe_temp = get_room_temp()) {
-            temp = *maybe_temp;
-        } else {
-            // Room temperature isn't available. Use the unit's thermistor and send something
-            // reasonable.
-            thermistor = ThermistorSetting::Unit;
-            temp = 20;
-        }
-        send_buf_[6] = (thermistor << 4) | ((uint8_t(target) - 15) & 0xf);
-        send_buf_[7] = (last_recv_status_[7] & 0xC0) | uint8_t((temp - 10) * 2);
-
-        // Bytes 8-10. Initialize bytes 8-9 to 0 to not echo back timer settings set by the AC.
-        send_buf_[8] = 0;
-        send_buf_[9] = 0;
-        send_buf_[10] = last_recv_status_[10];
-
-        if (is_initializing_) {
-            // Request settings when controller turns on.
-            send_buf_[8] |= 0x40;
-            // Set bit 0x80 of byte 10 to use byte 9 for the Fahrenheit setting flag (0x40).
-            if (fahrenheit_) {
-                send_buf_[9] |= 0x40;
-            }
-            send_buf_[10] = 0x80;
-        }
-
-        // Byte 11.
-        send_buf_[11] = last_recv_status_[11];
-
-        // Byte 12.
-        send_buf_[12] = calc_checksum(send_buf_);
-
-        ESP_LOGD(TAG, "sending status message %s", format_hex_pretty(send_buf_, MsgLen).c_str());
-        UARTDevice::write_array(send_buf_, MsgLen);
-
-        pending_status_change_ = false;
-        pending_send_ = PendingSendKind::Status;
-        last_sent_status_millis_ = millis();
-
-        // If we sent an updated temperature to the AC, update temperature in HA too.
-        // Slave controller temperature sensor is ignored.
-        if (!slave_ && thermistor == ThermistorSetting::Controller) {
-            float ha_temp = temp;
-            if (fahrenheit_) {
-                ha_temp = TempConversion::lgcelsius_to_celsius(ha_temp);
-            }
-            if (this->current_temperature != ha_temp) {
-                this->current_temperature = ha_temp;
-                publish_state();
-            }
-        }
-#endif
     }
 
     void send_erv_status_message() {
@@ -673,71 +516,13 @@ private:
         // Byte 12: Checksum
         send_buf_[12] = calc_checksum(send_buf_);
         
-        ESP_LOGD(TAG, "sending ERV control message %s", format_hex_pretty(send_buf_, MsgLen).c_str());
+        ESP_LOGW(TAG, "sending ERV control message %s", format_hex_pretty(send_buf_, MsgLen).c_str());
+        ESP_LOGI(TAG, "LG Controller - Slave mode: %s", slave_ ? "enabled" : "disabled");
         UARTDevice::write_array(send_buf_, MsgLen);
         
         pending_status_change_ = false;
         pending_send_ = PendingSendKind::Status;
         last_sent_status_millis_ = millis();
-    }
-
-    void send_type_a_settings_message() {
-        if (last_recv_type_a_settings_[0] != 0xCA && last_recv_type_a_settings_[0] != 0xAA) {
-            ESP_LOGE(TAG, "Unexpected missing previous CA/AA message");
-            pending_type_a_settings_change_ = false;
-            return;
-        }
-
-        // Copy settings from the CA/AA message we received.
-        memcpy(send_buf_, last_recv_type_a_settings_, MsgLen);
-        send_buf_[0] = slave_ ? 0x2A : 0xAA;
-
-        // Bytes 2-6 store the installer fan speeds
-        send_buf_[2] = fan_speed_[0];
-        send_buf_[3] = fan_speed_[1];
-        send_buf_[4] = fan_speed_[2];
-        send_buf_[5] = fan_speed_[3];
-
-        send_buf_[12] = calc_checksum(send_buf_);
-
-        ESP_LOGD(TAG, "sending type A settings %s", format_hex_pretty(send_buf_, MsgLen).c_str());
-        UARTDevice::write_array(send_buf_, MsgLen);
-
-        pending_type_a_settings_change_ = false;
-        pending_send_ = PendingSendKind::TypeA;
-    }
-
-    void send_type_b_settings_message(bool timed) {
-        if (timed) {
-            ESP_LOGD(TAG, "sending timed AB message");
-        }
-        if (last_recv_type_b_settings_[0] != 0xCB && last_recv_type_b_settings_[0] != 0xAB) {
-            ESP_LOGE(TAG, "Unexpected missing previous CB/AB message");
-            pending_type_b_settings_change_ = false;
-            // Don't try to send another message immediately after.
-            last_sent_recv_type_b_millis_ = millis();
-            return;
-        }
-
-        // Copy settings from the CB/AB message we received.
-        memcpy(send_buf_, last_recv_type_b_settings_, MsgLen);
-        send_buf_[0] = slave_ ? 0x2B : 0xAB;
-
-        // Set the high bit of the second byte to request a CB message from the unit.
-        if (timed) {
-            send_buf_[1] |= 0x80;
-        } else {
-            send_buf_[1] &= ~0x80;
-        }
-
-        send_buf_[12] = calc_checksum(send_buf_);
-
-        ESP_LOGD(TAG, "sending type B settings %s", format_hex_pretty(send_buf_, MsgLen).c_str());
-        UARTDevice::write_array(send_buf_, MsgLen);
-
-        pending_type_b_settings_change_ = false;
-        pending_send_ = PendingSendKind::TypeB;
-        last_sent_recv_type_b_millis_ = millis();
     }
 
     void process_message(const uint8_t* buffer, bool* had_error) {
@@ -775,46 +560,6 @@ private:
             process_status_message(*sender, buffer, had_error);
             return;
         }
-#if 0
-        switch (buffer[0] & 0xf8) {
-            case 0xC8:
-                sender = MessageSender::Unit;
-                break;
-            case 0xA8:
-                if (!slave_) {
-                    // Ignore (our own?) master controller messages.
-                    return;
-                }
-                sender = MessageSender::Master;
-                break;
-            case 0x28:
-                if (slave_) {
-                    // Ignore (our own?) slave controller messages.
-                    return;
-                }
-                sender = MessageSender::Slave;
-                break;
-            default:
-                return; // Unknown message sender. Ignore.
-        }
-
-        switch (buffer[0] & 0b111) {
-            case 0: // 0xC8/A8/28
-                process_status_message(*sender, buffer, had_error);
-                break;
-            case 1: // 0xC9
-                process_capabilities_message(*sender, buffer);
-                break;
-            case 2: // 0xCA/AA/2A
-                process_type_a_settings_message(*sender, buffer);
-                break;
-            case 3: // 0xCB/AB/2B
-                process_type_b_settings_message(*sender, buffer);
-                break;
-            default:
-                return;
-        }
-#endif
     }
 
     void process_b4_message(const uint8_t* buffer) {
@@ -866,7 +611,6 @@ private:
 
             // Don't update our settings if we have a pending change/send, because else we overwrite
             // changes we still have to send (or are sending) to the ERV.
-#if 0
             if (pending_status_change_) {
                 ESP_LOGD(TAG, "ignoring because pending change");
                 return;
@@ -875,10 +619,13 @@ private:
                 ESP_LOGD(TAG, "ignoring because pending send");
                 return;
             }
-#endif
+            // Copy the received message to the last received status buffer
+            memcpy(last_recv_status_, buffer, MsgLen);
+            #if 0
             if (sender != MessageSender::Slave) {
-                memcpy(last_recv_status_, buffer, MsgLen);
+                
             }
+            #endif
             bool power_on = false;
             // Byte 1: Power control - bits 1:0
             // For 0xD0 (unit status): 0x02 = ON, 0x00 = OFF
@@ -979,118 +726,6 @@ private:
             is_initializing_ = false;
         }
 
-        // Handle simple input sensors first. These are safe to update even if we have a pending
-        // change.
-#if 0
-
-        bool read_temp = false;
-        if (slave_) {
-            // Let the slave controller report the temperature from the master.
-            read_temp = (sender == MessageSender::Master);
-        } else {
-            // Report the unit's room temperature only if we're using the internal thermistor.
-            // With an external temperature sensor, some units report the temperature we sent and
-            // others always send the internal temperature.
-            read_temp = (sender == MessageSender::Unit && internal_thermistor_.state);
-        }
-        if (read_temp) {
-            float room_temp = float(buffer[7] & 0x3F) / 2 + 10;
-            if (fahrenheit_) {
-                room_temp = TempConversion::lgcelsius_to_celsius(room_temp);
-            }
-            if (this->current_temperature != room_temp) {
-                this->current_temperature = room_temp;
-                publish_state();
-            }
-        }
-
-        // Don't update our settings if we have a pending change/send, because else we overwrite
-        // changes we still have to send (or are sending) to the AC.
-#if 0
-        if (pending_status_change_) {
-            ESP_LOGD(TAG, "ignoring because pending change");
-            return;
-        }
-        if (pending_send_ == PendingSendKind::Status) {
-            ESP_LOGD(TAG, "ignoring because pending send");
-            return;
-        }
-#endif
-        if (sender != MessageSender::Slave) {
-            memcpy(last_recv_status_, buffer, MsgLen);
-        }
-
-        uint8_t b = buffer[1];
-        if ((b & 0x2) == 0) {
-            this->mode = climate::CLIMATE_MODE_OFF;
-        } else {
-            uint8_t mode_val = (b >> 2) & 0b111;
-            switch (mode_val) {
-                case 0:
-                    this->mode = climate::CLIMATE_MODE_COOL;
-                    break;
-                case 1:
-                    this->mode = climate::CLIMATE_MODE_DRY;
-                    break;
-                case 2:
-                    this->mode = climate::CLIMATE_MODE_FAN_ONLY;
-                    break;
-                case 3:
-                    this->mode = climate::CLIMATE_MODE_HEAT_COOL;
-                    break;
-                case 4:
-                    this->mode = climate::CLIMATE_MODE_HEAT;
-                    break;
-                default:
-                    ESP_LOGE(TAG, "received invalid operation mode from AC (%u)", mode_val);
-                    *had_error = true;
-                    return;
-            }
-        }
-
-        uint8_t fan_val = b >> 5;
-        switch (fan_val) {
-            case 0:
-                this->fan_mode = climate::CLIMATE_FAN_LOW;
-                break;
-            case 1:
-                this->fan_mode = climate::CLIMATE_FAN_MEDIUM;
-                break;
-            case 2:
-                this->fan_mode = climate::CLIMATE_FAN_HIGH;
-                break;
-            case 3:
-                this->fan_mode = climate::CLIMATE_FAN_AUTO;
-                break;
-            case 4:
-                this->fan_mode = climate::CLIMATE_FAN_QUIET;
-                break;
-            default:
-                ESP_LOGE(TAG, "received unexpected fan mode from AC (%u)", fan_val);
-                *had_error = true;
-                return;
-        }
-
-        float target = float((buffer[6] & 0xf) + 15);
-        if (buffer[5] & 0x1) {
-            target += 0.5;
-        }
-        if (fahrenheit_) {
-            target = TempConversion::lgcelsius_to_celsius(target);
-        }
-        this->target_temperature = target;
-
-        active_reservation_ = buffer[3] & 0x10;
-
-        // Log AC decoded data
-        ESP_LOGI(TAG, "AC Status - Mode: %d, Fan: %d, Power: %s, Target Temp: %.1f",
-                 static_cast<int>(this->mode),
-                 this->fan_mode.has_value() ? static_cast<int>(this->fan_mode.value()) : -1,
-                 (this->mode != climate::CLIMATE_MODE_OFF) ? "ON" : "OFF",
-                 this->target_temperature);
-
-        publish_state();
-#endif
     }
 
     void process_capabilities_message(MessageSender sender, const uint8_t* buffer) {
@@ -1127,50 +762,6 @@ private:
         is_initializing_ = false;
     }
 
-    void process_type_a_settings_message(MessageSender sender, const uint8_t* buffer) {
-        // Send settings the first time we receive a 0xCA message.
-        if (sender != MessageSender::Slave) {
-            bool first_time = last_recv_type_a_settings_[0] == 0;
-            memcpy(last_recv_type_a_settings_, buffer, MsgLen);
-            if (first_time) {
-                pending_type_a_settings_change_ = true;
-            }
-        }
-
-        if (sender != MessageSender::Slave) {
-            // Handle fan speed 0 (slow) change
-            fan_speed_[0] = buffer[2];
-            fan_speed_slow_.publish_state(fan_speed_[0]);
-
-            // Handle fan speed 1 (low) change
-            fan_speed_[1] = buffer[3];
-            fan_speed_low_.publish_state(fan_speed_[1]);
-
-            // Handle fan speed 2 (medium) change
-            fan_speed_[2] = buffer[4];
-            fan_speed_medium_.publish_state(fan_speed_[2]);
-
-            // Handle fan speed 3 (high) change
-            fan_speed_[3] = buffer[5];
-            fan_speed_high_.publish_state(fan_speed_[3]);
-        }
-    }
-
-    void process_type_b_settings_message(MessageSender sender, const uint8_t* buffer) {
-        // Ignore this message from other controllers.
-        if (sender != MessageSender::Unit) {
-            return;
-        }
-
-        // Send installer settings the first time we receive a 0xCB message.
-        bool first_time = last_recv_type_b_settings_[0] == 0;
-        memcpy(last_recv_type_b_settings_, buffer, MsgLen);
-        if (first_time) {
-            pending_type_b_settings_change_ = true;
-        }
-
-        last_sent_recv_type_b_millis_ = millis();
-    }
 
     void update() {
         ESP_LOGD(TAG, "update");
@@ -1196,12 +787,6 @@ private:
             switch (pending_send_) {
                 case PendingSendKind::Status:
                     pending_status_change_ = true;
-                    break;
-                case PendingSendKind::TypeA:
-                    pending_type_a_settings_change_ = true;
-                    break;
-                case PendingSendKind::TypeB:
-                    pending_type_b_settings_change_ = true;
                     break;
                 case PendingSendKind::None:
                     ESP_LOGE(TAG, "unreachable");
@@ -1255,44 +840,21 @@ private:
                 }
                 delay(5);
             }
-        };
-#if 0  
-        if (pending_type_a_settings_change_) {
-            if (check_can_send()) {
-                send_type_a_settings_message();
-            }
-            return;
-        }
-        if (pending_type_b_settings_change_) {
-            if (check_can_send()) {
-                send_type_b_settings_message(/* timed = */ false);
-            }
-            return;
-        }
-#endif        
+        };      
         // Send a status message if there is a pending change.
         if (pending_status_change_) {
             if (check_can_send()) {
+                ESP_LOGI(TAG, "Sending status message due to pending change");
                 send_status_message();
-#if 0
-                pending_type_a_settings_change_ = true;
-#endif
+                pending_status_change_ = false;
             }
             return;
         }
-#if 0
-        // Send an AB message every 10 minutes to request pipe temperature values.
-        if (!slave_ && millis_now - last_sent_recv_type_b_millis_ > 10 * 60 * 1000) {
-            if (check_can_send()) {
-                send_type_b_settings_message(/* timed = */ true);
-            }
-            return;
-        }
-#endif
         // Send a status message every 20 seconds.
         // Slave controllers only send this if needed.
         if (!slave_ && millis_now - last_sent_status_millis_ > 20 * 1000) {
             if (check_can_send()) {
+                ESP_LOGI(TAG, "Sending status message every 20 seconds");
                 send_status_message();
             }
             return;
