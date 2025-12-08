@@ -3,7 +3,7 @@ esphome:
   friendly_name: ${devicename}
   project:
     name: lg.erv-controller
-    version: "0.9.3.1"
+    version: "0.9.3.2"
 
 esp32:
   #board: esp32dev

@@ -550,6 +550,7 @@ private:
         // Byte 2: ERV Mode (full byte)
         // Byte 3: Fan speed (bits 7-5 only, mask 0xE0)
         // Byte 5: Add mode (bits 1-0 only, mask 0x03)
+#if 0
         bool message_unchanged = true;
         if ((send_buf_[1] & 0x03) != (last_sent_message_[1] & 0x03)) {
             message_unchanged = false;
@@ -572,7 +573,8 @@ private:
             pending_status_change_ = false;
             return;
         }
-        
+#endif
+
         ESP_LOGW(TAG, "sending ERV control message %s", format_hex_pretty(send_buf_, MsgLen).c_str());
         ESP_LOGI(TAG, "LG Controller - Slave mode: %s", slave_ ? "enabled" : "disabled");
         UARTDevice::write_array(send_buf_, MsgLen);
@@ -634,17 +636,18 @@ private:
         
         // Update CO2 sensor
         if (co2_sensor_ != nullptr) {
-            co2_sensor_->publish_state(co2);
+            // co2_sensor_->publish_state(co2);
         }
         
-        // Update room temperature in climate component
-        if (fahrenheit_) {
-            float temp_f = esphome::celsius_to_fahrenheit(temp_c);
-            this->current_temperature = temp_f;
-        } else {
-            this->current_temperature = temp_c;
+        // Update room temperature in climate component - only update the value, don't publish state
+        // Publishing state from B4 messages can cause fan_mode and other optional values to be lost
+        // The temperature will be included when status messages (D0/B0) publish the complete state
+        float new_temp = fahrenheit_ ? esphome::celsius_to_fahrenheit(temp_c) : temp_c;
+        if (this->current_temperature != new_temp) {
+            this->current_temperature = new_temp;
+            // Don't call publish_state() here - let status messages handle complete state publishing
+            // This prevents fan_mode and other optional values from being lost
         }
-        publish_state();
     }
 
     void process_status_message(MessageSender sender, const uint8_t* buffer, bool* had_error) {
