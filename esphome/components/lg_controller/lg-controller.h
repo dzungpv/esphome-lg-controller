@@ -517,15 +517,29 @@ private:
         // Byte 12: Checksum
         send_buf_[12] = calc_checksum(send_buf_);
         
-        // Compare with last sent message - only send if different or if we have a pending change
-        // This prevents sending duplicate messages when processing received status updates
-        if (memcmp(send_buf_, last_sent_message_, MsgLen) == 0) {
+        // Compare with last sent message - only compare relevant bytes/bits:
+        // Byte 1: Power control (full byte)
+        // Byte 2: ERV Mode (full byte)
+        // Byte 3: Fan speed (bits 7-5 only, mask 0xE0)
+        // Byte 5: Add mode (bits 1-0 only, mask 0x03)
+        bool message_unchanged = true;
+        if ((send_buf_[1] & 0x03) != (last_sent_message_[1] & 0x03)) {
+            message_unchanged = false;
+        } else if (send_buf_[2] != last_sent_message_[2]) {
+            message_unchanged = false;
+        } else if ((send_buf_[3] & 0xE0) != (last_sent_message_[3] & 0xE0)) {
+            message_unchanged = false;
+        } else if ((send_buf_[5] & 0x03) != (last_sent_message_[5] & 0x03)) {
+            message_unchanged = false;
+        }
+        
+        if (message_unchanged) {
             if (pending_status_change_) {
                 // Message is the same but user requested a change - this shouldn't happen,
                 // but clear the flag anyway to prevent loops
                 ESP_LOGD(TAG, "Message unchanged despite pending change, clearing flag");
             } else {
-                ESP_LOGD(TAG, "Message unchanged, skipping send");
+                ESP_LOGD(TAG, "Message unchanged (comparing bytes 1, 2, 3[7:5], 5[1:0]), skipping send");
             }
             pending_status_change_ = false;
             return;
@@ -572,8 +586,8 @@ private:
             process_b4_message(buffer);
             return;
         }
-        // Check for ERV message (D0 or B0) first
-        if (buffer[0] == 0xD0 || buffer[0] == 0xB0) {
+        // Check for ERV message B0 only
+        if (buffer[0] == 0xB0) {
             sender = MessageSender::Unit;
             process_status_message(*sender, buffer, had_error);
             return;
