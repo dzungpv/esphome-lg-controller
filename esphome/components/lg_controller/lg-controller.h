@@ -148,6 +148,7 @@ class LgController final : public climate::Climate, public uart::UARTDevice, pub
     uint8_t last_recv_type_b_settings_[MsgLen] = {};
 
     uint8_t send_buf_[MsgLen] = {};
+    uint8_t last_sent_message_[MsgLen] = {};
     uint32_t last_sent_status_millis_ = 0;
 
     enum class PendingSendKind : uint8_t { None, Status };
@@ -516,9 +517,26 @@ private:
         // Byte 12: Checksum
         send_buf_[12] = calc_checksum(send_buf_);
         
+        // Compare with last sent message - only send if different or if we have a pending change
+        // This prevents sending duplicate messages when processing received status updates
+        if (memcmp(send_buf_, last_sent_message_, MsgLen) == 0) {
+            if (pending_status_change_) {
+                // Message is the same but user requested a change - this shouldn't happen,
+                // but clear the flag anyway to prevent loops
+                ESP_LOGD(TAG, "Message unchanged despite pending change, clearing flag");
+            } else {
+                ESP_LOGD(TAG, "Message unchanged, skipping send");
+            }
+            pending_status_change_ = false;
+            return;
+        }
+        
         ESP_LOGW(TAG, "sending ERV control message %s", format_hex_pretty(send_buf_, MsgLen).c_str());
         ESP_LOGI(TAG, "LG Controller - Slave mode: %s", slave_ ? "enabled" : "disabled");
         UARTDevice::write_array(send_buf_, MsgLen);
+        
+        // Store the message we just sent
+        memcpy(last_sent_message_, send_buf_, MsgLen);
         
         pending_status_change_ = false;
         pending_send_ = PendingSendKind::Status;
@@ -541,7 +559,7 @@ private:
             return;
         }
 
-        if (pending_send_ != PendingSendKind::None && memcmp(send_buf_, buffer, MsgLen) == 0) {
+        if (pending_send_ != PendingSendKind::None && memcmp(last_sent_message_, buffer, MsgLen) == 0) {
             ESP_LOGD(TAG, "verified send");
             pending_send_ = PendingSendKind::None;
             return;
