@@ -376,6 +376,12 @@ public:
 
     // Process changes from HA.
     void control(const climate::ClimateCall &call) override {
+        // Store current values to compare
+        climate::ClimateMode old_mode = this->mode;
+        optional<climate::ClimateFanMode> old_fan_mode = this->fan_mode;
+        optional<climate::ClimatePreset> old_preset = this->preset;
+        
+        // Update values if provided
         if (call.get_mode().has_value()) {
             this->mode = *call.get_mode();
         }
@@ -385,8 +391,28 @@ public:
         if (call.get_preset().has_value()) {
             this->preset = *call.get_preset();
         }
-        this->pending_status_change_ = true;
-        this->publish_state();
+        
+        // Check if anything actually changed
+        bool has_change = false;
+        if (call.get_mode().has_value() && this->mode != old_mode) {
+            has_change = true;
+        }
+        if (call.get_fan_mode().has_value()) {
+            if (!old_fan_mode.has_value() || this->fan_mode != old_fan_mode) {
+                has_change = true;
+            }
+        }
+        if (call.get_preset().has_value()) {
+            if (!old_preset.has_value() || this->preset != old_preset) {
+                has_change = true;
+            }
+        }
+        
+        // Only set pending change and publish if something actually changed
+        if (has_change) {
+            this->pending_status_change_ = true;
+            this->publish_state();
+        }
     }
 
     climate::ClimateTraits traits() override {
@@ -405,11 +431,13 @@ private:
             return;
         }
 
+        // Compare current setting with new setting - only update if different
         if (fan_speed_[index] == value) {
             return;
         }
 
         fan_speed_[index] = value;
+        // Only set pending change if not initializing and value actually changed
         if (!is_initializing_) {
             pending_status_change_ = true;
         }
